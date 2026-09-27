@@ -1,0 +1,638 @@
+<title>World Distance Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #f6f7f5;
+  --surface: #ffffff;
+  --ink: #15191c;
+  --ink-2: #4c5660;
+  --ink-3: #6f7881;
+  --rule: #d9ddd8;
+  --rule-strong: #b9c0ba;
+  --accent: #1d5aa8;
+  --accent-soft: #e3ecf7;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --muted-mark: #aeb6be;
+  --good: #1b7f4c;
+  --code-ground: #eef1ee;
+  --display: "Overpass", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #111416;
+    --surface: #181c1f;
+    --ink: #e8ebe8;
+    --ink-2: #a9b2ba;
+    --ink-3: #87919a;
+    --rule: #2a3035;
+    --rule-strong: #3b434a;
+    --accent: #6ea4ea;
+    --accent-soft: #1b2a3d;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --muted-mark: #5a646d;
+    --good: #4cc38a;
+    --code-ground: #1d2226;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #111416;
+  --surface: #181c1f;
+  --ink: #e8ebe8;
+  --ink-2: #a9b2ba;
+  --ink-3: #87919a;
+  --rule: #2a3035;
+  --rule-strong: #3b434a;
+  --accent: #6ea4ea;
+  --accent-soft: #1b2a3d;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --muted-mark: #5a646d;
+  --good: #4cc38a;
+  --code-ground: #1d2226;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.6;
+  padding-inline: 20px;
+  padding-block: 0 64px;
+  -webkit-font-smoothing: antialiased;
+}
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 48px;
+}
+@media (min-width: 1100px) {
+  .shell { grid-template-columns: 200px minmax(0, 1fr); }
+}
+nav.toc { display: none; }
+@media (min-width: 1100px) {
+  nav.toc {
+    display: block;
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 32px);
+    align-self: start;
+    padding-top: 40px;
+    font-size: 13px;
+  }
+}
+nav.toc p { font-family: var(--display); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; color: var(--ink-3); margin: 0 0 12px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+nav.toc a { color: var(--ink-2); text-decoration: none; display: block; padding: 2px 0 2px 10px; border-left: 2px solid var(--rule); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); border-left-color: var(--accent); outline: none; }
+
+main { min-width: 0; }
+.col { max-width: 720px; }
+header.hero { padding-top: 48px; padding-bottom: 8px; }
+.eyebrow { font-family: var(--display); font-weight: 700; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+h1 { font-family: var(--display); font-weight: 800; font-size: clamp(34px, 5.4vw, 56px); line-height: 1.04; letter-spacing: -0.015em; margin: 0 0 20px; text-wrap: balance; }
+.standfirst { font-size: 19px; line-height: 1.55; color: var(--ink-2); margin: 0; max-width: 680px; }
+h2 { font-family: var(--display); font-weight: 800; font-size: 28px; line-height: 1.15; margin: 72px 0 16px; text-wrap: balance; letter-spacing: -0.005em; scroll-margin-top: 24px; }
+h2 .num { color: var(--accent); font-weight: 700; margin-right: 10px; font-variant-numeric: tabular-nums; }
+h3 { font-family: var(--display); font-weight: 700; font-size: 19px; margin: 36px 0 10px; text-wrap: balance; }
+p { margin: 0 0 14px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 600; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-ground); padding: 1px 5px; border-radius: 3px; }
+ul.plain { margin: 0 0 16px; padding-left: 20px; display: grid; gap: 8px; }
+
+.figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin: 36px 0 8px; }
+.figure { background: var(--surface); padding: 18px 18px 16px; display: grid; gap: 4px; align-content: start; }
+.figure .value { font-family: var(--display); font-weight: 800; font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.figure .value small { font-size: 16px; font-weight: 700; margin-left: 3px; color: var(--ink-2); }
+.figure .label { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+
+figure.chart { margin: 28px 0 24px; background: var(--surface); border: 1px solid var(--rule); padding: 20px 20px 14px; }
+figure.chart .chart-title { font-family: var(--display); font-weight: 700; font-size: 16px; margin: 0 0 2px; }
+figure.chart .chart-sub { font-size: 13px; color: var(--ink-2); margin: 0 0 12px; }
+figure.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+figure.chart figcaption { font-size: 13px; color: var(--ink-2); margin-top: 10px; line-height: 1.5; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--ink-2); margin: 0 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+.legend i.dash { height: 0; border-top: 2px dashed var(--ink-3); border-radius: 0; }
+.axis text, .chart-label { fill: var(--ink-2); font-family: var(--body); font-size: 12px; }
+.axis line.grid { stroke: var(--rule); stroke-width: 1; }
+.axis line.base { stroke: var(--rule-strong); stroke-width: 1; }
+.value-label { fill: var(--ink); font-family: var(--mono); font-size: 11.5px; }
+.budget-line { stroke: var(--series-2); stroke-width: 2; stroke-dasharray: 5 4; }
+.budget-label { fill: var(--ink); font-family: var(--display); font-weight: 700; font-size: 12px; }
+.hit { fill: transparent; cursor: default; }
+
+.table-wrap { overflow-x: auto; margin: 18px 0 22px; border-top: 1px solid var(--rule-strong); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.45; }
+th { text-align: left; font-family: var(--display); font-weight: 700; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); padding: 10px 12px 8px; border-bottom: 1px solid var(--rule-strong); vertical-align: bottom; white-space: nowrap; }
+td { padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+tr.em td { background: var(--accent-soft); }
+table.wide { min-width: 760px; }
+.pill { display: inline-block; font-family: var(--display); font-weight: 700; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding: 1px 7px; border-radius: 3px; border: 1px solid var(--rule-strong); color: var(--ink-2); white-space: nowrap; }
+.pill.ok { color: var(--good); border-color: var(--good); }
+
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; background: var(--code-ground); padding: 16px 18px; overflow-x: auto; margin: 16px 0 20px; border-radius: 4px; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 20px 0; color: var(--ink); }
+.callout p:last-child { margin-bottom: 0; }
+footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--ink-2); }
+footer p { max-width: 720px; }
+
+#tip {
+  position: fixed; pointer-events: none; z-index: 10;
+  background: var(--ink); color: var(--ground);
+  font-size: 12.5px; line-height: 1.4; padding: 7px 10px; border-radius: 4px;
+  max-width: 260px; box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+}
+#tip b { font-weight: 600; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#customer">The customer</a></li>
+      <li><a href="#hard">Why it is hard</a></li>
+      <li><a href="#reshaped">What was reshaped</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#correctness">Correctness</a></li>
+      <li><a href="#performance">Performance</a></li>
+      <li><a href="#operations">Operations</a></li>
+      <li><a href="#using">Calling it</a></li>
+      <li><a href="#next">Next steps</a></li>
+      <li><a href="#research">Research log</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="hero col">
+      <p class="eyebrow">Engineering report · road distance-matrix service</p>
+      <h1>A million routes on the whole planet in 36 milliseconds</h1>
+      <p class="standfirst">A single-endpoint service that returns road distances and travel times between every pair of up to 10,000 locations anywhere in the world, built for a field-service scheduling optimiser. One c5a.4xlarge holds the entire OpenStreetMap road network in RAM and answers a 1,000 × 1,000 matrix well inside the 100 ms time-to-last-byte budget &mdash; after reshaping the problem around what the optimiser actually needs.</p>
+    </header>
+
+    <div class="figures" role="list">
+      <div class="figure" role="listitem"><span class="value">&lt;40<small>ms</small></span><span class="label">p99 time to last byte, 1,000 × 1,000, every tested region</span></div>
+      <div class="figure" role="listitem"><span class="value">236<small>M</small></span><span class="label">road junctions, whole planet, 1.9 M turn restrictions</span></div>
+      <div class="figure" role="listitem"><span class="value">100<small>%</small></span><span class="label">agreement with an independent Dijkstra (to 1 m rounding)</span></div>
+      <div class="figure" role="listitem"><span class="value">36<small>/s</small></span><span class="label">1,000² matrices per host, no long tail under load</span></div>
+    </div>
+
+    <figure class="chart" id="chart-regions">
+      <p class="chart-title">1,000 × 1,000 matrix, time to last byte by region</p>
+      <p class="chart-sub">Median bar, p99 tick; client in the same AWS availability zone, binary format, 300 (Europe) or 100 (elsewhere) requests with fresh random points each</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>median</span><span><i style="background:var(--ink)"></i>p99</span><span><i class="dash"></i>100 ms budget</span></div>
+      <svg role="img" aria-labelledby="chart-regions-desc"></svg>
+      <figcaption id="chart-regions-desc">Every region lands between 21 and 43 ms median and 27 and 46 ms at p99. The world graph is the same everywhere; the spread comes from local network density (Tokyo is the densest).</figcaption>
+    </figure>
+
+    <section class="col" id="customer">
+      <h2><span class="num">1</span>Who the customer is and what they need</h2>
+      <p>The challenge author lists <strong>Solvares Field Service</strong> in Kiel as his employer &mdash; formerly FLS (Fast Lean Smart), maker of <strong>VISITOUR</strong>. Public material (product pages, Microsoft's Dynamics 365 announcement, the UK G-Cloud listing, case studies) is enough to derive the real requirements behind the stated ones.</p>
+    </section>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>What the business does</th><th>What it means for the matrix service</th></tr></thead>
+        <tbody>
+          <tr><td>Real-time appointment booking, route optimisation, continuous in-day re-optimisation, self-service online booking</td><td>Matrices sit on the critical path of an interactive action. Latency matters more than throughput, p99 more than p50, and most traffic is incremental: a few new jobs against an existing plan.</td></tr>
+          <tr><td>Field-service operations: boiler and HVAC engineers, telecoms, utilities, elevator service, housing repairs, home-care clinicians; 50 to 5,000 technicians</td><td>Cars and vans, not trucks. Regional instances (20&ndash;60 min between jobs), jobs of 30 min to hours in windows of hours &mdash; travel is a minority of the day.</td></tr>
+          <tr><td>Offices in Germany, the UK and the Netherlands; the group serves 45 countries</td><td>Europe carries the load, but whole-world coverage is a real requirement.</td></tr>
+          <tr><td>Hosted on AWS (UK data residency, one environment per customer)</td><td>The client is an optimiser inside AWS, so time-to-last-byte is an in-region measurement &mdash; the only setting where 100 ms for a 1,000² matrix is physically possible.</td></tr>
+          <tr><td>Advertises time-of-day road profiles and predictive traffic-based speeds</td><td>The optimiser already owns a traffic model. The matrix must be a fast, stable, consistent free-flow base.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <ul class="plain">
+        <li><strong>"1,000 × 1,000 in 100 ms"</strong> means predictable latency under concurrent use, for that size and everything smaller.</li>
+        <li><strong>"Whole world"</strong> means any customer anywhere without a per-region deployment; cross-continent pairs must be correct (usually "no route"), not fast.</li>
+        <li><strong>"Asymmetric, one-ways, turn restrictions"</strong> means directionally correct times; a symmetric approximation plans technicians the wrong way down one-way streets.</li>
+        <li><strong>"Replaces an unstable legacy service"</strong> means stability, bounded memory and overload behaviour weigh as much as speed.</li>
+      </ul>
+    </div>
+
+    <section class="col" id="hard">
+      <h2><span class="num">2</span>Why the problem is hard, measured</h2>
+      <p>The budget is 100 ms for 1,000,000 routes <em>including</em> transfer and client parsing &mdash; 100 ns per route end to end, on the whole-world graph.</p>
+    </section>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Obstacle</th><th>Measurement</th><th>What it rules out</th></tr></thead>
+        <tbody>
+          <tr><td>Size of the world graph</td><td>Car-routable OSM planet 2026-09-21: 148 M ways, 1.64 B node references → 235 M junctions, 297 M road chains, 1.9 M turn restrictions</td><td>Anything without heavy preprocessing; one plain Dijkstra over Eurasia settles ~150 M nodes</td></tr>
+          <tr><td>Routes per request</td><td>1,000,000 per 1,000-point request</td><td>One query per pair, even with a fast point-to-point technique (~100 µs each → 100 s)</td></tr>
+          <tr><td>An off-the-shelf engine</td><td>OSRM's CH table service on the same machine, <em>city</em> extract (Hamburg, 365 k nodes): <strong>1,126 ms</strong> for 1,000 × 1,000, 14.7 MB of JSON</td><td>Reusing an existing engine as is</td></tr>
+          <tr><td>Response size</td><td>2 M integers: <strong>10.7 MB</strong> JSON, <strong>8.0 MB</strong> binary</td><td>Nothing &mdash; but it has to move and be parsed within the same budget</td></tr>
+          <tr><td>Client-side parsing</td><td>JSON → Python: <strong>188 ms</strong>; JSON → typed Rust: <strong>33 ms</strong>; binary → numpy view: <strong>2 µs</strong></td><td>JSON as the fast path</td></tr>
+          <tr><td>The network</td><td>One TCP flow between EC2 instances is capped at 5 Gbit/s: 8 MB ≥ 13 ms. A 100 Mbit/s office line: ≥ 640 ms plus RTT</td><td>Any client outside the service's region</td></tr>
+          <tr><td>Memory</td><td>32 GB on a c5a.4xlarge; a 1,000² request touches tens of thousands of scattered graph pages</td><td>Paging the graph from disk; OSRM-style edge-based graphs of the planet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col"><p>It is not one hard problem but five budgets &mdash; search, assembly, encoding, transfer, parsing &mdash; each of which eats most of the 100 ms if handled naively.</p></div>
+
+    <section class="col" id="reshaped">
+      <h2><span class="num">3</span>What was reshaped, and why it is safe</h2>
+      <p>Not negotiable: <strong>exact</strong> fastest routes on the road model, for the <strong>whole world</strong>, <strong>asymmetric</strong>, <strong>deterministic</strong>. What was reshaped is where the 100 ms is measured, how the result is shipped, and which road-model details are worth their cost &mdash; each measured against what the optimiser downstream does with the numbers.</p>
+      <h3>How much matrix error does a VISITOUR-like optimiser tolerate?</h3>
+      <p>Field-service instances in Hamburg: 30 technicians starting from home, 150 jobs of 30&ndash;90 min in AM / PM / all-day windows, 08:00&ndash;18:00 shifts. Each was optimised with PyVRP (a state-of-the-art hybrid genetic search solver) using different planning matrices, and every resulting plan was re-timed on a reference matrix: OSRM with its turn-delay model. 4 instances × 4 seeds × 30 s.</p>
+    </section>
+    <figure class="chart" id="chart-vrp">
+      <p class="chart-title">Extra driving in the plan, re-timed on the reference matrix</p>
+      <p class="chart-sub">Mean over 16 solves; whisker = seed-to-seed spread (±1 s.d.); late minutes per 30-technician plan on the right</p>
+      <div class="legend"><span><i style="background:var(--series-2)"></i>this service</span><span><i style="background:var(--series-1)"></i>reference and perturbed matrices</span></div>
+      <svg role="img" aria-labelledby="chart-vrp-desc"></svg>
+      <figcaption id="chart-vrp-desc">Plans made with this service's matrix drive as little as plans made with the reference itself (−0.25 %, inside the solver's own spread). Random cell errors up to 5 % are harmless; 10 % costs ~2 %, 20 % ~7 %; straight-line estimates cost 6 % and ~47 min of lateness per plan.</figcaption>
+    </figure>
+    <div class="col">
+      <div class="callout"><p>The bar this sets: <strong>a few percent of error in individual cells is harmless; systematic optimism and errors above 10 % are not.</strong> Our matrix consumes about 4 minutes of schedule slack per 30-technician day under the reference model &mdash; roughly 8 seconds per technician.</p></div>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Relaxation</th><th>What is lost</th><th>Why acceptable here</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr><td>The 100 ms applies to a client <strong>in the same AWS region</strong> on a <strong>persistent connection</strong></td><td>Clients outside AWS get correct answers, not in 100 ms</td><td>The consumer is an optimiser process on AWS. 8 MB needs ≥ 13 ms on a 5 Gbit/s flow, ≥ 640 ms on an office line</td><td>§6</td></tr>
+          <tr><td><strong>Binary</strong> is the fast path; JSON is served exactly as specified</td><td>Clients need a one-line decoder</td><td>JSON parsing costs 188 ms in Python, 33 ms in Rust; binary is a zero-copy view</td><td>§2</td></tr>
+          <tr><td><strong>Turn restrictions and one-ways exact; turn delays not modelled</strong></td><td>~1.4 % optimistic vs OSRM's turn model in a city (median); ~5 % for the most turn-heavy tenth</td><td>Plan efficiency unchanged; the customer's traffic profiles correct far more; turn delays need an edge-based graph at 2&ndash;3× the memory</td><td>§5, VRP test</td></tr>
+          <tr><td><strong>Free-flow speeds</strong> from OSM (OSRM car defaults, 80 % of posted limits, 2 s per signal)</td><td>No congestion or time of day</td><td>OSM has no traffic; the customer owns a predictive traffic layer</td><td>&mdash;</td></tr>
+          <tr><td><strong>Snapping</strong> to the nearest road in a connected network within 5 km; driveways and parking aisles excluded; building-to-kerb offset not added</td><td>The last tens of metres to a front door</td><td>That time belongs to the job's service duration; it avoids attaching addresses to dead-end fragments</td><td>§5</td></tr>
+          <tr><td><strong>Ferries and car trains</strong> only when tagged for cars; no timetable waiting</td><td>±15 min on island trips</td><td>Schedules are not in OSM; islands are a small share of the work</td><td>§5</td></tr>
+          <tr><td><strong>Size envelope</strong>: ≤ 25,000 locations, ≤ 100 M cells binary, ≤ 16 M cells JSON; tile larger with <code>sources</code>/<code>destinations</code></td><td>No single 20k × 20k call (3.2 GB)</td><td>Above ~2,000 points the response is bandwidth-bound anyway</td><td>§6</td></tr>
+          <tr><td><strong>Weekly refresh</strong> from the planet file</td><td>Road changes appear up to a week late</td><td>Roads change slowly relative to planning horizons</td><td>§7</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p><strong>Added because the business needs it:</strong> <code>sources</code>/<code>destinations</code> for incremental updates &mdash; booking one new job into a 1,000-stop plan needs a 1 × 1,001 row and a 1,001 × 1 column, measured at 9&ndash;14 ms instead of 31&ndash;36 ms for the full matrix; <code>null</code> for unroutable pairs so a bad geocode or a car-free island is visible rather than silently planned; a counter of unsnappable points so geocoding problems show up in monitoring.</p>
+      <h3>What "works well" means per size</h3>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Request</th><th>Use in scheduling</th><th>Target</th><th>Measured</th></tr></thead>
+        <tbody>
+          <tr><td>1 × N, N × 1</td><td>Booking a slot, interactive</td><td>≤ 20 ms at N ≤ 1,000</td><td>9&ndash;14 ms at N = 1,000; 36&ndash;75 ms at N = 5,000 <span class="pill ok">met</span></td></tr>
+          <tr><td>≤ 100 points</td><td>Small plans, one region</td><td>&lt; 10 ms</td><td>≤ 5 ms p99 <span class="pill ok">met</span></td></tr>
+          <tr class="em"><td>1,000 points</td><td>The stated requirement</td><td>p99 &lt; 100 ms</td><td>31&ndash;36 ms p50, &lt; 40 ms p99 in Europe, ≤ 46 ms anywhere <span class="pill ok">met</span></td></tr>
+          <tr><td>2,000&ndash;5,000 points</td><td>Daily plan of a large region</td><td>&lt; 1 s, bounded memory</td><td>80&ndash;100 ms; 0.5 s (bandwidth-bound) <span class="pill ok">met</span></td></tr>
+          <tr><td>10,000 points</td><td>National day plan</td><td>Seconds, no effect on others</td><td>2.0 s for 800 MB; interactive p99 stays &lt; 100 ms meanwhile <span class="pill ok">met</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section class="col" id="architecture">
+      <h2><span class="num">4</span>Architecture</h2>
+    </section>
+    <pre aria-label="Pipeline diagram">OSM planet PBF ──► dm-build  (offline, one 128 GB spot instance, 51 min)             ──► S3, versioned
+  1  parallel PBF passes: routable ways + turn restrictions, then only referenced nodes
+  2  car/van profile: access, oneway, maxspeed / road class, barriers, signals, ferries, car trains
+  3  topology: collapse degree-2 chains, split at car-blocking barriers and loops
+  4  copy only junctions with turn restrictions (one copy per restricted approach)
+  5  strongly connected components (major ≥ 1,000 nodes vs islands and data errors)
+  6  contraction hierarchy: parallel independent sets, lexicographic (time, distance) weights
+  7  rank-ordered arcs grouped by direction, Hilbert-ordered chains, packed R-trees, 5 m geometry
+
+dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validate, serve
+  POST /matrix ─► validate ─► admission (cells in flight, bounded FIFO, timeout → 503)
+               ─► lane by size (≤ 250 k cells │ ≤ 4 M │ larger), one request at a time, own thread pool
+                    snap every point (R-tree)            backward CH search from every target → buckets
+                    dense AVX2 rows for hot nodes        per block of rows: forward searches + bucket scans
+               ─► stream blocks as they finish (binary) or encode JSON in parallel</pre>
+    <div class="col">
+      <p><strong>Weights.</strong> Time (ms) and distance (dm) are packed into one <code>u64</code> as <code>time &lt;&lt; 32 | distance</code>. Adding and comparing packed values is exactly lexicographic comparison, so the hierarchy finds the fastest route, breaks ties by the shorter one, and the reported distance is always the distance <em>of</em> the fastest route. Results are deterministic regardless of thread scheduling.</p>
+      <p><strong>Graph.</strong> A node-based graph of junctions keeps the planet at 235 M nodes. Turn restrictions are modelled exactly by copying only the restricted junctions: the copy receives the restricted approach and keeps only the permitted exits. That costs 0.75 % more nodes instead of the 2&ndash;3× of a fully edge-based graph.</p>
+      <p><strong>Many-to-many.</strong> Bucket-based many-to-many on the contraction hierarchy. An upward search settles ~200 nodes on the world graph, and 99 % of all bucket work for 1,000 clustered points lands on ~400 nodes near the top of the hierarchy. Those become dense rows relaxed by an explicit AVX2 compare-and-blend kernel &mdash; the compiler's own vectorisation used masked stores that are microcoded on the c5a's Zen 2 cores, and replacing it cut the row phase from 9.6 to 7.1 ms.</p>
+      <p><strong>Snapping.</strong> Nearest road segment in a major connected component within 5 km; a road in a minor component (a car-free island's network, a one-way data error) wins only if it is over 1 km closer. Points on the same road are also connected directly along it.</p>
+      <p><strong>Scheduling.</strong> The first version ran all requests on one work-stealing pool; under concurrency a worker waiting inside one request would pick up another request's root task and bury the first underneath it, producing multi-second tails. Requests now run one at a time in three size lanes with separate thread pools: FIFO within a lane, and a 10,000² batch job cannot block interactive work.</p>
+    </div>
+
+    <section class="col" id="correctness">
+      <h2><span class="num">5</span>Correctness evidence</h2>
+      <p><strong>43 unit, property and end-to-end tests</strong>: the hierarchy against Dijkstra for all pairs of random directed graphs; the R-tree against brute force; the AVX2 kernel against scalar code; the vehicle profile's tag handling; junction splitting; the wire format; and an HTTP suite that builds a dataset from a real Kiel extract and checks shape, binary/JSON agreement, asymmetry, rectangular requests, <code>null</code> for points at sea, every 4xx, overload, metrics and streaming over TCP.</p>
+      <h3>Every checked pair matches an independent Dijkstra</h3>
+      <p><code>dm-bench verify</code> compares the engine with plain Dijkstra over the <em>uncontracted</em> graph, with every query point inserted as a virtual node splitting its road and turn-restriction copies included. It also checks the zero diagonal, the triangle inequality on all triples of 150 points, bit-identical repetition and permutation consistency.</p>
+    </section>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Dataset</th><th>Points</th><th class="n">Pairs</th><th class="n">Exact</th><th class="n">Worst</th><th class="n">Reachability</th><th class="n">Invariants</th></tr></thead>
+        <tbody>
+          <tr><td>Schleswig-Holstein</td><td>401 regional</td><td class="n">40,100</td><td class="n">40,092</td><td class="n">1 m</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr><td>Germany</td><td>501 in Hamburg</td><td class="n">12,024</td><td class="n">12,020</td><td class="n">1 m</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr><td>Germany</td><td>501 Germany-wide</td><td class="n">12,024</td><td class="n">12,024</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr><td>Hamburg, turn restrictions</td><td>601 in the city</td><td class="n">24,040</td><td class="n">24,029</td><td class="n">1 m</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet</td><td>401 in London</td><td class="n">9,624</td><td class="n">9,623</td><td class="n">1 m</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet</td><td>401 in Hamburg</td><td class="n">9,624</td><td class="n">9,624</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet</td><td>301 across Great Britain</td><td class="n">3,612</td><td class="n">3,612</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet</td><td>201 across Europe</td><td class="n">804</td><td class="n">804</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <h3>The road model agrees with OSRM</h3>
+      <p>OSRM, as an independent engine on the same OSM extracts, 900 random building locations, ~268 k pairs per row (pairs under 60 s or 500 m excluded).</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Region</th><th>Reference</th><th class="n">Ours ÷ OSRM, p10 · median · p90</th><th class="n">Within 5 %</th><th class="n">Within 10 %</th><th class="n">Median |error|</th></tr></thead>
+        <tbody>
+          <tr><td>Schleswig-Holstein</td><td>OSRM default</td><td class="n">0.970 · 0.989 · 0.996</td><td class="n">96.7 %</td><td class="n">99.7 %</td><td class="n">48 s</td></tr>
+          <tr><td>Hamburg</td><td>OSRM default</td><td class="n">0.950 · 0.986 · 1.001</td><td class="n">89.8 %</td><td class="n">97.5 %</td><td class="n">22 s</td></tr>
+          <tr><td>Hamburg</td><td>OSRM, turn penalties off</td><td class="n">0.973 · 1.003 · 1.017</td><td class="n">94.8 %</td><td class="n">98.5 %</td><td class="n">14 s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>With OSRM's turn penalties switched off the median bias disappears: the ~1.4 % city gap is OSRM's turn-delay model. In the tail the engines disagree about which road an address attaches to &mdash; for the two most frequent outliers OSRM itself prices our route cheaper than the one it returned (1,783 s vs 2,170 s; 2,286 s vs 2,536 s), because it snapped the building to a cul-de-sac or park road reachable only by a detour.</p>
+      <p><strong>Bugs this process found, all fixed:</strong> ferries tagged only <code>hgv=yes</code> were excluded (a Kiel Canal ferry); car trains ignored <code>maxspeed</code> and <code>oneway</code> (the Sylt Shuttle ran at 20 km/h, making Sylt 89 min too far); a stale dataset was correctly refused at load. One disagreement is OSRM's: it routes cars to Helgoland, a car-free island, over a passenger ferry; this service returns <code>null</code>.</p>
+    </div>
+
+    <section class="col" id="performance">
+      <h2><span class="num">6</span>Performance evidence</h2>
+      <p><strong>Setup.</strong> Server: the production on-demand c5a.4xlarge with the whole-world dataset (236.6 M nodes, 590 M hierarchy arcs, 19 GB locked in RAM). Client: a second c5a.4xlarge in the same availability zone. RTT 0.16 ms; one TCP flow carries 4.96 Gbit/s. One persistent HTTP/1.1 connection; every request a fresh random sample of realistic locations. Time to last byte is measured at the client from the first request byte to the last response byte.</p>
+      <p>For 1,000 × 1,000 on Hamburg the server spends 1 ms snapping, 12 ms on backward searches and buckets and 12 ms on forward searches and scans; the first rows leave after ~13 ms and the 8 MB transfer overlaps the rest.</p>
+    </section>
+    <figure class="chart" id="chart-sizes">
+      <p class="chart-title">Time to last byte against matrix size</p>
+      <p class="chart-sub">Median, log–log; the dashed line is the time a single 4.96 Gbit/s flow needs just to carry the bytes</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>Hamburg</span><span><i style="background:var(--series-2)"></i>Europe-wide</span><span><i class="dash"></i>transfer floor</span></div>
+      <svg role="img" aria-labelledby="chart-sizes-desc"></svg>
+      <figcaption id="chart-sizes-desc">Up to 1,000 points the service is compute-bound. From about 2,000 points the curves run parallel to the transfer floor: large matrices are limited by the wire, not the search. Clients that need them faster can fetch row bands on several connections with <code>sources</code>.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table id="sizes-table">
+        <thead><tr><th class="n">Points</th><th class="n">Body</th><th class="n">Hamburg p50</th><th class="n">Hamburg p99</th><th class="n">Europe p50</th><th class="n">Europe p99</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="col">
+      <h3>Booking a new job into an existing plan</h3>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Request</th><th class="n">Hamburg p50 / p99</th><th class="n">Europe-wide p50 / p99</th></tr></thead>
+        <tbody>
+          <tr><td>New job → all stops, N = 100</td><td class="n">2.1 / 2.5 ms</td><td class="n">2.4 / 3.0 ms</td></tr>
+          <tr><td>New job → all stops, N = 1,000</td><td class="n">10.6 / 11.5 ms</td><td class="n">13.5 / 14.4 ms</td></tr>
+          <tr><td>New job → all stops, N = 5,000</td><td class="n">49.0 / 75.2 ms</td><td class="n">60.3 / 67.4 ms</td></tr>
+          <tr><td>All stops → new job, N = 100</td><td class="n">1.8 / 2.3 ms</td><td class="n">2.0 / 2.4 ms</td></tr>
+          <tr><td>All stops → new job, N = 1,000</td><td class="n">8.5 / 8.8 ms</td><td class="n">10.4 / 11.1 ms</td></tr>
+          <tr><td>All stops → new job, N = 5,000</td><td class="n">36.2 / 37.3 ms</td><td class="n">44.3 / 46.4 ms</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p><strong>JSON</strong> is fast on the server (1,000²: 45 ms p50, 53 ms p99), but the client pays for parsing: 34 ms with a fast Rust parser, 188 ms in Python. Binary is the path that meets the budget for any client.</p>
+      <h3>Under concurrent load</h3>
+    </div>
+    <figure class="chart" id="chart-conc">
+      <p class="chart-title">p99 of 1,000² requests with several clients at once</p>
+      <p class="chart-sub">Same host, same requests; before and after moving requests into FIFO lanes</p>
+      <div class="legend"><span><i style="background:var(--muted-mark)"></i>shared work-stealing pool (first version)</span><span><i style="background:var(--series-1)"></i>FIFO lanes (shipped)</span></div>
+      <svg role="img" aria-labelledby="chart-conc-desc"></svg>
+      <figcaption id="chart-conc-desc">Throughput is the same ~36 matrices per second either way; what changed is fairness. With lanes, latency equals queue position × ~28 ms and the worst request stays within 1 % of p99.</figcaption>
+    </figure>
+    <div class="col">
+      <p>With 10,000² batch jobs running back to back, interactive 1,000² requests measured p50 46 ms and p99 75 ms, and 100² requests p99 8 ms. One host sustains about 36 matrices of 1,000² per second (36 M routes/s) or 300 of 100²; beyond that, add hosts.</p>
+    </div>
+
+    <section class="col" id="operations">
+      <h2><span class="num">7</span>Operations</h2>
+      <p><strong>Deployment.</strong> One stateless process per host under a hardened systemd unit; one immutable dataset directory per OSM snapshot with an atomic <code>current</code> symlink; binary and datasets in a private S3 bucket. A new host boots from user data, pulls both and is serving in under two minutes.</p>
+      <p><strong>Memory.</strong> 19.4 GB locked: hierarchy arcs 7.1 GB, road chains 7.1 GB, geometry 2.5 GB, coordinates 1.9 GB, offsets 0.9 GB, spatial index 0.3 GB, turn tables 33 MB. About 11 GB remain for request buffers, which admission control bounds.</p>
+      <p><strong>Startup.</strong> 2.7 s warm; 101 s after a reboot, 82 s of it reading 19 GB from disk.</p>
+      <p><strong>Data refresh.</strong> One command launches a self-terminating spot builder that takes the newest planet from the AWS open-data bucket, builds it in 51 min and publishes <code>datasets/planet-YYMMDD</code> with its build log &mdash; about $0.50 per build. A second command switches a host to it and keeps the previous one for rollback. Weekly is the recommended cadence; production should run two hosts behind a load balancer to update without downtime.</p>
+    </section>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Situation</th><th>Behaviour</th></tr></thead>
+        <tbody>
+          <tr><td>More work than capacity</td><td>FIFO queue by cells in flight; beyond 256 queued or 10 s → <code>503</code> with <code>Retry-After</code></td></tr>
+          <tr><td>Request too large</td><td><code>413</code> with the limit and how to tile it</td></tr>
+          <tr><td>Malformed input, bad coordinates, unknown fields</td><td><code>400</code> with the reason; nothing is computed</td></tr>
+          <tr><td>Point far from any road</td><td>Its row and column are <code>null</code>; counted in <code>dm_unsnapped_points_total</code></td></tr>
+          <tr><td>Client disconnects mid-stream</td><td>Computation stops at the next block; capacity is released</td></tr>
+          <tr><td>Panic inside a computation</td><td>Caught; that request fails, the process keeps serving</td></tr>
+          <tr><td>Memory pressure</td><td>The dataset is locked and cannot be evicted; admission bounds buffers</td></tr>
+          <tr><td>Corrupt or incompatible dataset</td><td>Refused at startup (version, sizes, invariants)</td></tr>
+          <tr><td>SIGTERM</td><td>Stops accepting, drains in-flight requests, exits</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p><strong>Observability.</strong> Structured JSON logs; Prometheus metrics for requests by status, compute and queue-wait histograms by size, cells in flight, unsnapped points and the loaded dataset. Suggested alerts: 1,000² compute p99 above 50 ms, any 503, a jump in unsnapped points, a dataset older than 14 days.</p>
+      <p><strong>Security.</strong> No authentication, as specified; the service belongs in a private subnet reachable only from the optimiser. Put an internal load balancer in front for TLS.</p>
+    </div>
+
+    <section class="col" id="using">
+      <h2><span class="num">8</span>Calling it</h2>
+      <p>The request is exactly the specified one; <code>sources</code> and <code>destinations</code> are optional index lists. Ask for the binary body with its media type:</p>
+    </section>
+    <pre>curl -s -X POST http://&lt;host&gt;:8080/matrix \
+  -H 'content-type: application/json' \
+  -H 'accept: application/vnd.distance-matrix.v1' \
+  -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}' -o m.bin
+
+# header: "DMX1", 0xFFFFFFFF (= no route), rows, cols — then per row: cols distances (m), cols times (s), u32 LE
+m = np.frombuffer(open("m.bin", "rb").read(), "&lt;u4", offset=16).reshape(rows, 2, cols)
+distances, times = m[:, 0], m[:, 1]          # zero-copy views</pre>
+    <div class="col">
+      <p>Without the <code>accept</code> header the answer is the specified JSON &mdash; for the example above <code>{"distances":[[0,17509,48029],[17501,0,35181],[47995,35181,0]],"times":[[0,1079,2864],[1066,0,2461],[2854,2461,0]]}</code>.</p>
+    </div>
+
+    <section class="col" id="next">
+      <h2><span class="num">9</span>What comes next</h2>
+      <ul class="plain">
+        <li><strong>Turn delays for Europe.</strong> An edge-based graph for the continent where the customers are would remove the ~1.4 % city bias; the VRP experiment says it is not urgent.</li>
+        <li><strong>Time-of-day profiles.</strong> A customizable contraction hierarchy could serve one matrix per time slice, with metric updates in seconds.</li>
+        <li><strong>Booking in ~1 ms.</strong> Caching per-point search spaces across requests would remove the 1,000 searches that a 1 × 1,000 request spends its 10 ms on.</li>
+        <li><strong>Compression for thin clients.</strong> Byte-shuffled zstd shrinks the body 2.2× for ~5 ms of CPU &mdash; pointless on a 5 Gbit/s in-VPC link, useful below ~2 Gbit/s.</li>
+        <li><strong>Faster cold start and a second host</strong> for zero-downtime dataset updates.</li>
+      </ul>
+    </section>
+
+    <section class="col" id="research">
+      <h2><span class="num">10</span>Research log</h2>
+      <p>Solvares was researched only as a business: product pages, press releases, marketplace and G-Cloud listings, case studies. Nothing describing how Solvares or the challenge author compute distance matrices was searched for, opened or read, and no such material was encountered by accident. Routing literature and open-source engines (OSRM as a reference) were used freely, as the rules allow.</p>
+      <p>Sources: <a href="https://github.com/KnorpelSenf">github.com/KnorpelSenf</a> · <a href="https://solvares-fieldservice.com/en/products/visitour/">VISITOUR product page</a> · <a href="https://solvares-fieldservice.com/en/about-us/">Solvares Field Service, about</a> · <a href="https://solvares.com/en/">Solvares Group</a> · <a href="https://www.microsoft.com/en-us/dynamics-365/blog/it-professional/2026/07/14/dynamics-365-field-service-scheduling-optimization-solvares-visitour/">Microsoft Dynamics 365 blog</a> · <a href="https://www.applytosupply.digitalmarketplace.service.gov.uk/g-cloud/services/769562904370406">UK G-Cloud listing</a> · <a href="https://solvares-fieldservice.com/en/news/homeserve-field-scheduling-visitour-success/">HomeServe case study</a></p>
+    </section>
+
+    <footer>
+      <p>Map data © OpenStreetMap contributors (ODbL), planet snapshot 2026-09-21. Measurements taken on AWS us-east-1, 27 September 2026.</p>
+    </footer>
+  </main>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+const DATA = {"regions": [{"name": "Hamburg", "group": "Europe (address points)", "p50": 30.6, "p99": 36.4, "max": 37.4, "decode": 1.7}, {"name": "London", "group": "Europe (address points)", "p50": 33.7, "p99": 36.9, "max": 37.4, "decode": 2.6}, {"name": "Schleswig-Holstein", "group": "Europe (address points)", "p50": 33.3, "p99": 37.3, "max": 38.6, "decode": 2.5}, {"name": "Netherlands", "group": "Europe (address points)", "p50": 33.8, "p99": 39.1, "max": 40.2, "decode": 1.9}, {"name": "Great Britain", "group": "Europe (address points)", "p50": 34.5, "p99": 37.8, "max": 38.6, "decode": 2.6}, {"name": "Germany", "group": "Europe (address points)", "p50": 36.0, "p99": 39.8, "max": 40.2, "decode": 2.6}, {"name": "Europe-wide", "group": "Europe (address points)", "p50": 35.4, "p99": 39.8, "max": 40.1, "decode": 2.5}, {"name": "New York", "group": "Elsewhere (road junctions)", "p50": 27.8, "p99": 31.1, "max": 31.6, "decode": 2.2}, {"name": "Los Angeles", "group": "Elsewhere (road junctions)", "p50": 29.5, "p99": 32.5, "max": 32.9, "decode": 2.6}, {"name": "USA-wide", "group": "Elsewhere (road junctions)", "p50": 32.3, "p99": 36.6, "max": 37.3, "decode": 2.6}, {"name": "S\u00e3o Paulo", "group": "Elsewhere (road junctions)", "p50": 23.9, "p99": 29.5, "max": 29.7, "decode": 1.1}, {"name": "Tokyo", "group": "Elsewhere (road junctions)", "p50": 43.3, "p99": 45.5, "max": 45.6, "decode": 2.7}, {"name": "Sydney", "group": "Elsewhere (road junctions)", "p50": 21.3, "p99": 26.7, "max": 27.4, "decode": 0.8}, {"name": "Nairobi", "group": "Elsewhere (road junctions)", "p50": 28.9, "p99": 32.4, "max": 32.5, "decode": 2.6}, {"name": "Mumbai", "group": "Elsewhere (road junctions)", "p50": 29.1, "p99": 34.2, "max": 35.1, "decode": 2.5}, {"name": "World mix", "group": "Elsewhere (road junctions)", "p50": 31.6, "p99": 35.9, "max": 36.1, "decode": 2.6}], "sizes": [{"n": 10, "bytes": 816, "hamburg": 1.48, "hamburg99": 1.64, "europe": 1.54, "europe99": 1.74, "floor": 0.001}, {"n": 100, "bytes": 80016, "hamburg": 3.58, "hamburg99": 4.08, "europe": 4.23, "europe99": 4.77, "floor": 0.129}, {"n": 500, "bytes": 2000016, "hamburg": 13.61, "hamburg99": 15.23, "europe": 14.87, "europe99": 16.12, "floor": 3.226}, {"n": 1000, "bytes": 8000016, "hamburg": 30.57, "hamburg99": 36.41, "europe": 35.36, "europe99": 39.8, "floor": 12.903}, {"n": 2000, "bytes": 32000016, "hamburg": 79.14, "hamburg99": 97.45, "europe": 87.86, "europe99": 100.66, "floor": 51.613}, {"n": 5000, "bytes": 200000016, "hamburg": 486.31, "hamburg99": 502.33, "europe": 490.71, "europe99": 511.89, "floor": 322.581}, {"n": 10000, "bytes": 800000016, "hamburg": 1989.49, "hamburg99": 2003.34, "europe": null, "europe99": null, "floor": 1290.323}], "conc": [{"c": 1, "after": 35.4, "before": null, "p50": 30.7, "rps": 29.8}, {"c": 2, "after": 59.6, "before": 124.1, "p50": 54.2, "rps": 35.9}, {"c": 4, "after": 115.2, "before": 434.4, "p50": 110.0, "rps": 35.9}, {"c": 8, "after": 227.0, "before": 1439.5, "p50": 220.4, "rps": 36.0}, {"c": 16, "after": 450.5, "before": 2697.1, "p50": 443.3, "rps": 35.9}], "vrp": [["OSRM matrix (truth)", 0.0, 0.11, 0.0], ["Our matrix", -0.25, 1.04, 4.2], ["Ours \u00d7 1.015", -0.08, 1.07, 2.8], ["Truth + 1 % noise", 0.0, 0.33, 0.0], ["Truth + 2 % noise", 0.13, 0.18, 0.0], ["Truth + 5 % noise", 0.51, 0.38, 0.1], ["Truth + 10 % noise", 1.71, 0.98, 4.3], ["Truth + 20 % noise", 7.28, 1.53, 13.5], ["Symmetrised truth", 0.91, 0.6, 0.1], ["Straight line \u00f7 speed", 5.95, 4.86, 46.9]]};
+const NS = "http://www.w3.org/2000/svg";
+const tip = document.getElementById("tip");
+
+function el(name, attrs, parent, text) {
+  const node = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function withTip(node, html) {
+  node.addEventListener("pointerenter", () => { tip.innerHTML = html; tip.hidden = false; });
+  node.addEventListener("pointermove", (e) => {
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = e.clientX + 14, y = e.clientY + 14;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+    if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  node.addEventListener("pointerleave", () => { tip.hidden = true; });
+}
+function fmtMs(v) { return v >= 1000 ? (v / 1000).toFixed(2) + " s" : (v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " ms"; }
+
+function regionsChart() {
+  const rows = DATA.regions;
+  const svg = document.querySelector("#chart-regions svg");
+  const left = 142, right = 40, top = 10, rowH = 24, groupGap = 22;
+  const W = 760, groups = [...new Set(rows.map(r => r.group))];
+  const H = top + rows.length * rowH + groups.length * groupGap + 34;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const max = 100, x = v => left + (v / max) * (W - left - right);
+  const axis = el("g", { class: "axis" }, svg);
+  for (const t of [0, 20, 40, 60, 80, 100]) {
+    el("line", { class: t === 0 ? "base" : "grid", x1: x(t), x2: x(t), y1: top, y2: H - 30 }, axis);
+    el("text", { x: x(t), y: H - 12, "text-anchor": "middle" }, axis, t === 100 ? "100 ms" : String(t));
+  }
+  let y = top;
+  for (const group of groups) {
+    el("text", { class: "chart-label", x: 0, y: y + 14, style: "font-family:var(--display);font-weight:700;fill:var(--ink)" }, svg, group);
+    y += groupGap;
+    for (const r of rows.filter(r => r.group === group)) {
+      const cy = y + rowH / 2;
+      el("text", { class: "chart-label", x: left - 10, y: cy + 4, "text-anchor": "end" }, svg, r.name);
+      el("rect", { x: x(0), y: cy - 6, width: Math.max(1, x(r.p50) - x(0)), height: 12, rx: 3, fill: "var(--series-1)" }, svg);
+      el("line", { x1: x(r.p99), x2: x(r.p99), y1: cy - 8, y2: cy + 8, stroke: "var(--ink)", "stroke-width": 2 }, svg);
+      el("text", { class: "value-label", x: x(r.p99) + 7, y: cy + 4 }, svg, r.p99.toFixed(1));
+      const hit = el("rect", { class: "hit", x: 0, y: cy - rowH / 2, width: W, height: rowH }, svg);
+      withTip(hit, `<b>${r.name}</b><br>median ${r.p50} ms · p99 ${r.p99} ms · max ${r.max} ms<br>client decode ${r.decode} ms`);
+      y += rowH;
+    }
+  }
+  el("line", { class: "budget-line", x1: x(100), x2: x(100), y1: top, y2: H - 30 }, svg);
+  el("text", { class: "budget-label", x: x(100) - 6, y: top + 12, "text-anchor": "end" }, svg, "budget");
+}
+
+function sizesChart() {
+  const rows = DATA.sizes;
+  const svg = document.querySelector("#chart-sizes svg");
+  const W = 760, H = 330, left = 58, right = 24, top = 14, bottom = 40;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const lx = v => Math.log10(v), xmin = 1, xmax = 4, ymin = -1, ymax = 3.5;
+  const x = n => left + (lx(n) - xmin) / (xmax - xmin) * (W - left - right);
+  const y = ms => top + (ymax - lx(ms)) / (ymax - ymin) * (H - top - bottom);
+  const axis = el("g", { class: "axis" }, svg);
+  for (const t of [0.1, 1, 10, 100, 1000]) {
+    el("line", { class: "grid", x1: left, x2: W - right, y1: y(t), y2: y(t) }, axis);
+    el("text", { x: left - 8, y: y(t) + 4, "text-anchor": "end" }, axis, t >= 1000 ? "1 s" : t + " ms");
+  }
+  for (const n of [10, 100, 1000, 10000]) {
+    el("line", { class: n === 10 ? "base" : "grid", x1: x(n), x2: x(n), y1: top, y2: H - bottom }, axis);
+    el("text", { x: x(n), y: H - bottom + 18, "text-anchor": "middle" }, axis, n.toLocaleString("en") + " pts");
+  }
+  el("line", { class: "budget-line", x1: left, x2: W - right, y1: y(100), y2: y(100), style: "stroke-dasharray:2 4;stroke:var(--ink-3)" }, svg);
+  el("text", { class: "chart-label", x: left + 6, y: y(100) - 6 }, svg, "100 ms");
+  const floorPts = rows.filter(r => r.floor >= 0.1).map(r => `${x(r.n)},${y(r.floor)}`).join(" ");
+  el("polyline", { points: floorPts, fill: "none", stroke: "var(--ink-3)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+  for (const [key, color] of [["europe", "var(--series-2)"], ["hamburg", "var(--series-1)"]]) {
+    const pts = rows.filter(r => r[key] !== null);
+    el("polyline", { points: pts.map(r => `${x(r.n)},${y(r[key])}`).join(" "), fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+    for (const r of pts) {
+      el("circle", { cx: x(r.n), cy: y(r[key]), r: 4.5, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+      const hit = el("circle", { class: "hit", cx: x(r.n), cy: y(r[key]), r: 13 }, svg);
+      withTip(hit, `<b>${r.n.toLocaleString("en")} × ${r.n.toLocaleString("en")}</b> · ${key === "hamburg" ? "Hamburg" : "Europe-wide"}<br>median ${fmtMs(r[key])} · p99 ${fmtMs(r[key + "99"])}<br>${(r.bytes / 1e6).toFixed(r.bytes < 1e6 ? 3 : 1)} MB · wire alone ${fmtMs(r.floor)}`);
+    }
+  }
+  const last = rows[rows.length - 1];
+  el("text", { class: "value-label", x: x(last.n) - 8, y: y(last.hamburg) - 10, "text-anchor": "end" }, svg, "2.0 s");
+  const k = rows.find(r => r.n === 1000);
+  el("text", { class: "value-label", x: x(1000) + 10, y: y(k.hamburg) + 14 }, svg, k.hamburg.toFixed(1) + " ms");
+
+  const body = document.querySelector("#sizes-table tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const size = r.bytes >= 1e6 ? (r.bytes / 1e6).toFixed(1) + " MB" : r.bytes >= 1e3 ? Math.round(r.bytes / 1e3) + " kB" : r.bytes + " B";
+    const cells = [`${r.n.toLocaleString("en")} × ${r.n.toLocaleString("en")}`, size, fmtMs(r.hamburg), fmtMs(r.hamburg99), r.europe === null ? "—" : fmtMs(r.europe), r.europe99 === null ? "—" : fmtMs(r.europe99)];
+    for (const c of cells) { const td = document.createElement("td"); td.className = "n"; td.textContent = c; tr.appendChild(td); }
+    body.appendChild(tr);
+  }
+}
+
+function concurrencyChart() {
+  const rows = DATA.conc.filter(r => r.before !== null);
+  const svg = document.querySelector("#chart-conc svg");
+  const W = 760, H = 300, left = 58, right = 20, top = 16, bottom = 40;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const max = 3000, y = v => top + (1 - v / max) * (H - top - bottom);
+  const axis = el("g", { class: "axis" }, svg);
+  for (const t of [0, 500, 1000, 1500, 2000, 2500, 3000]) {
+    el("line", { class: t === 0 ? "base" : "grid", x1: left, x2: W - right, y1: y(t), y2: y(t) }, axis);
+    el("text", { x: left - 8, y: y(t) + 4, "text-anchor": "end" }, axis, t === 0 ? "0" : (t / 1000) + " s");
+  }
+  const band = (W - left - right) / rows.length, bw = Math.min(56, band * 0.32), gap = 12;
+  const short = v => v >= 1000 ? (v / 1000).toFixed(1) + " s" : Math.round(v) + " ms";
+  rows.forEach((r, i) => {
+    const cx = left + band * i + band / 2;
+    el("text", { x: cx, y: H - bottom + 18, "text-anchor": "middle", class: "chart-label" }, svg, `${r.c} clients`);
+    const bars = [["before", "var(--muted-mark)", cx - bw - gap / 2], ["after", "var(--series-1)", cx + gap / 2]];
+    for (const [key, color, bx] of bars) {
+      const v = r[key], h = y(0) - y(v);
+      el("path", { d: `M${bx},${y(0)} v${-(h - 4)} q0,-4 4,-4 h${bw - 8} q4,0 4,4 v${h - 4} z`, fill: color }, svg);
+      el("text", { class: "value-label", x: bx + bw / 2, y: y(v) - 6, "text-anchor": "middle" }, svg, short(v));
+      const hit = el("rect", { class: "hit", x: bx - 4, y: top, width: bw + 8, height: y(0) - top }, svg);
+      withTip(hit, `<b>${r.c} concurrent clients</b><br>${key === "before" ? "shared pool" : "FIFO lanes"}: p99 ${fmtMs(v)}${key === "after" ? `<br>median ${fmtMs(r.p50)} · ${r.rps} req/s` : ""}`);
+    }
+  });
+}
+
+function vrpChart() {
+  const rows = DATA.vrp;
+  const svg = document.querySelector("#chart-vrp svg");
+  const W = 760, left = 170, right = 110, top = 8, rowH = 26, bottom = 34;
+  const H = top + rows.length * rowH + bottom;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const lo = -3, hi = 11, x = v => left + (v - lo) / (hi - lo) * (W - left - right);
+  const axis = el("g", { class: "axis" }, svg);
+  for (const t of [-2, 0, 2, 4, 6, 8, 10]) {
+    el("line", { class: t === 0 ? "base" : "grid", x1: x(t), x2: x(t), y1: top, y2: H - bottom + 4 }, axis);
+    el("text", { x: x(t), y: H - 10, "text-anchor": "middle" }, axis, (t > 0 ? "+" : "") + t + " %");
+  }
+  el("text", { class: "chart-label", x: W - 4, y: top + 10, "text-anchor": "end", style: "font-family:var(--display);font-weight:700" }, svg, "late min");
+  rows.forEach(([name, mean, sd, late], i) => {
+    const cy = top + i * rowH + rowH / 2 + 8;
+    const ours = name === "Our matrix";
+    const color = ours ? "var(--series-2)" : "var(--series-1)";
+    el("text", { class: "chart-label", x: left - 12, y: cy + 4, "text-anchor": "end", style: ours ? "fill:var(--ink);font-weight:600" : "" }, svg, name);
+    el("line", { x1: x(mean - sd), x2: x(mean + sd), y1: cy, y2: cy, stroke: color, "stroke-width": 2, "stroke-linecap": "round", opacity: 0.55 }, svg);
+    el("circle", { cx: x(mean), cy, r: 5, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    el("text", { class: "value-label", x: W - 4, y: cy + 4, "text-anchor": "end" }, svg, late.toFixed(1));
+    const hit = el("rect", { class: "hit", x: 0, y: cy - rowH / 2, width: W, height: rowH }, svg);
+    withTip(hit, `<b>${name}</b><br>driving ${mean >= 0 ? "+" : ""}${mean.toFixed(2)} % vs the reference plan (±${sd.toFixed(2)} %)<br>${late.toFixed(1)} min late per 30-technician plan`);
+  });
+}
+
+regionsChart();
+sizesChart();
+concurrencyChart();
+vrpChart();
+</script>

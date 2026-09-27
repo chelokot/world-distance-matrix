@@ -9,3 +9,4 @@ __pycache__/
 .dev-ip
 .prod-id
 .prod-private-ip
+.claude/
