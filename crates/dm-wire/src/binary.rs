@@ -1,4 +1,4 @@
-use crate::{DecodedMatrix, Reader, NO_ROUTE};
+use crate::{words, DecodedMatrix, NO_ROUTE};
 
 pub const CONTENT_TYPE: &str = "application/vnd.distance-matrix.v1";
 pub const MAGIC: [u8; 4] = *b"DMX1";
@@ -18,19 +18,21 @@ pub fn len(rows: usize, cols: usize) -> usize {
 }
 
 pub fn decode(body: &[u8]) -> Result<DecodedMatrix, String> {
-    let mut reader = Reader { body, offset: 0 };
-    if reader.take(4)? != MAGIC || reader.word()? != NO_ROUTE {
+    if body.len() < HEADER_LEN || body[..4] != MAGIC {
         return Err("not a binary distance matrix body".into());
     }
-    let (rows, cols) = (reader.word()? as usize, reader.word()? as usize);
-    if body.len() != len(rows, cols) {
-        return Err(format!("body length does not match a {rows}x{cols} matrix"));
+    let [no_route, rows, cols] = words(&body[4..HEADER_LEN])[..] else { unreachable!("three words") };
+    let (rows, cols) = (rows as usize, cols as usize);
+    if no_route != NO_ROUTE || body.len() != len(rows, cols) {
+        return Err(format!("body does not hold a {rows}x{cols} matrix"));
     }
+    let values = words(&body[HEADER_LEN..]);
     let mut distances = Vec::with_capacity(rows * cols);
     let mut durations = Vec::with_capacity(rows * cols);
-    for _ in 0..rows {
-        distances.extend(reader.words(cols)?);
-        durations.extend(reader.words(cols)?);
+    for row in 0..rows {
+        let start = row * 2 * cols;
+        distances.extend_from_slice(&values[start..start + cols]);
+        durations.extend_from_slice(&values[start + cols..start + 2 * cols]);
     }
     Ok(DecodedMatrix { rows, cols, distances, durations })
 }

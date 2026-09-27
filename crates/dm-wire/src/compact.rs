@@ -1,4 +1,4 @@
-use crate::{DecodedMatrix, Reader, NO_ROUTE};
+use crate::{words, DecodedMatrix, NO_ROUTE};
 
 pub const CONTENT_TYPE: &str = "application/vnd.distance-matrix.compact.v1";
 pub const MAGIC: [u8; 4] = *b"DMC1";
@@ -29,49 +29,119 @@ pub fn payload_len(cells: usize) -> usize {
     8 * cells + cells.div_ceil(8)
 }
 
-pub fn decode(body: &[u8], mut decompress: impl FnMut(&[u8], usize) -> Result<Vec<u8>, String>) -> Result<(DecodedMatrix, ServerTimes), String> {
-    let mut reader = Reader { body, offset: 0 };
-    if reader.take(4)? != MAGIC {
-        return Err("not a compact distance matrix body".into());
+#[derive(Default)]
+enum Stage {
+    #[default]
+    Header,
+    Frames(u32),
+    Trailer,
+    Done(ServerTimes),
+}
+
+#[derive(Default)]
+pub struct CompactDecoder {
+    pending: Vec<u8>,
+    stage: Stage,
+    matrix: DecodedMatrix,
+    previous: [Vec<i64>; 2],
+    row_order: Vec<u32>,
+    col_order: Vec<u32>,
+    decoded_rows: usize,
+}
+
+impl CompactDecoder {
+    pub fn feed(&mut self, bytes: &[u8], decompress: &mut impl FnMut(&[u8], usize) -> Result<Vec<u8>, String>) -> Result<(), String> {
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.extend_from_slice(bytes);
+        let mut offset = 0;
+        loop {
+            let available = &pending[offset..];
+            match self.stage {
+                Stage::Header => {
+                    if available.len() < 16 {
+                        break;
+                    }
+                    if available[..4] != MAGIC {
+                        return Err("not a compact distance matrix body".into());
+                    }
+                    let [rows, cols, frames] = words(&available[4..16])[..] else { unreachable!("three words") };
+                    let (rows, cols) = (rows as usize, cols as usize);
+                    let needed = 16 + 4 * (rows + cols);
+                    if available.len() < needed {
+                        break;
+                    }
+                    self.row_order = words(&available[16..16 + 4 * rows]);
+                    self.col_order = words(&available[16 + 4 * rows..needed]);
+                    self.matrix = DecodedMatrix { rows, cols, distances: vec![NO_ROUTE; rows * cols], durations: vec![NO_ROUTE; rows * cols] };
+                    self.previous = [vec![0; cols], vec![0; cols]];
+                    offset += needed;
+                    self.stage = if frames == 0 { Stage::Trailer } else { Stage::Frames(frames) };
+                }
+                Stage::Frames(left) => {
+                    if available.len() < 8 {
+                        break;
+                    }
+                    let [frame_rows, size] = words(&available[..8])[..] else { unreachable!("two words") };
+                    let (frame_rows, size) = (frame_rows as usize, size as usize);
+                    if available.len() < 8 + size {
+                        break;
+                    }
+                    let payload = decompress(&available[8..8 + size], payload_len(frame_rows * self.matrix.cols))?;
+                    self.decode_frame(frame_rows, &payload)?;
+                    offset += 8 + size;
+                    self.stage = if left == 1 { Stage::Trailer } else { Stage::Frames(left - 1) };
+                }
+                Stage::Trailer => {
+                    if available.len() < 12 {
+                        break;
+                    }
+                    let [queue_us, prepare_us, compute_us] = words(&available[..12])[..] else { unreachable!("three words") };
+                    offset += 12;
+                    self.stage = Stage::Done(ServerTimes { queue_us, prepare_us, compute_us });
+                }
+                Stage::Done(_) if available.is_empty() => break,
+                Stage::Done(_) => return Err("unexpected bytes after the matrix".into()),
+            }
+        }
+        self.pending = pending[offset..].to_vec();
+        Ok(())
     }
-    let (rows, cols, frames) = (reader.word()? as usize, reader.word()? as usize, reader.word()?);
-    let (row_order, col_order) = (reader.words(rows)?, reader.words(cols)?);
-    let mut encoded = [vec![0u32; rows * cols], vec![0u32; rows * cols]];
-    let mut previous = [vec![0i64; cols], vec![0i64; cols]];
-    let mut first_row = 0;
-    for _ in 0..frames {
-        let (frame_rows, size) = (reader.word()? as usize, reader.word()? as usize);
+
+    fn decode_frame(&mut self, frame_rows: usize, payload: &[u8]) -> Result<(), String> {
+        let Self { matrix, previous, row_order, col_order, decoded_rows, .. } = self;
+        let cols = matrix.cols;
         let cells = frame_rows * cols;
-        let payload = decompress(reader.take(size)?, payload_len(cells))?;
-        if payload.len() != payload_len(cells) || first_row + frame_rows > rows {
+        if payload.len() != payload_len(cells) || *decoded_rows + frame_rows > matrix.rows {
             return Err("compact frame does not match the matrix".into());
         }
-        for (matrix, above) in previous.iter_mut().enumerate() {
+        for (index, (above, target)) in previous.iter_mut().zip([&mut matrix.distances, &mut matrix.durations]).enumerate() {
             for row in 0..frame_rows {
+                let base = row_order[*decoded_rows + row] as usize * cols;
                 let (mut left, mut up_left) = (0i64, 0i64);
                 for (col, above) in above.iter_mut().enumerate() {
                     let cell = row * cols + col;
-                    let zig = u32::from_le_bytes(std::array::from_fn(|byte| payload[(4 * matrix + byte) * cells + cell]));
+                    let zig = u32::from_le_bytes(std::array::from_fn(|byte| payload[(4 * index + byte) * cells + cell]));
                     let value = unzigzag(zig) + *above + left - up_left;
                     (up_left, left, *above) = (*above, value, value);
                     let no_route = (payload[8 * cells + cell / 8] >> (cell % 8)) & 1 == 1;
-                    encoded[matrix][(first_row + row) * cols + col] = if no_route { NO_ROUTE } else { value as u32 };
+                    target[base + col_order[col] as usize] = if no_route { NO_ROUTE } else { value as u32 };
                 }
             }
         }
-        first_row += frame_rows;
+        *decoded_rows += frame_rows;
+        Ok(())
     }
-    let [queue_us, prepare_us, compute_us] = std::array::from_fn(|_| reader.word());
-    let times = ServerTimes { queue_us: queue_us?, prepare_us: prepare_us?, compute_us: compute_us? };
-    if first_row != rows || !reader.finished() {
-        return Err(format!("compact body does not hold a {rows}x{cols} matrix"));
-    }
-    let [mut distances, mut durations] = [vec![0u32; rows * cols], vec![0u32; rows * cols]];
-    for (k, &row) in row_order.iter().enumerate() {
-        for (l, &col) in col_order.iter().enumerate() {
-            let (target, source) = (row as usize * cols + col as usize, k * cols + l);
-            (distances[target], durations[target]) = (encoded[0][source], encoded[1][source]);
+
+    pub fn finish(self) -> Result<(DecodedMatrix, ServerTimes), String> {
+        match self.stage {
+            Stage::Done(times) if self.decoded_rows == self.matrix.rows => Ok((self.matrix, times)),
+            _ => Err("compact body is truncated".into()),
         }
     }
-    Ok((DecodedMatrix { rows, cols, distances, durations }, times))
+}
+
+pub fn decode(body: &[u8], mut decompress: impl FnMut(&[u8], usize) -> Result<Vec<u8>, String>) -> Result<(DecodedMatrix, ServerTimes), String> {
+    let mut decoder = CompactDecoder::default();
+    decoder.feed(body, &mut decompress)?;
+    decoder.finish()
 }

@@ -99,6 +99,13 @@ mod tests {
             let body: Vec<u8> = compact_header(&row_order, &col_order).into_iter().chain(blocks).chain(times.to_bytes()).collect();
             let (decoded, decoded_times) = decode_compact(&body).unwrap();
             assert_eq!(decoded_times, times);
+            let mut streamed = dm_wire::compact::CompactDecoder::default();
+            let mut decompress = |frame: &[u8], len: usize| zstd::bulk::decompress(frame, len).map_err(|e| e.to_string());
+            for piece in body.chunks(7) {
+                streamed.feed(piece, &mut decompress).unwrap();
+            }
+            let (streamed_matrix, streamed_times) = streamed.finish().unwrap();
+            assert_eq!((&streamed_matrix, streamed_times), (&decoded, times));
             for (k, row) in interleaved.chunks_exact(2 * cols).enumerate() {
                 for (l, &col) in col_order.iter().enumerate() {
                     let cell = row_order[k] as usize * cols + col as usize;

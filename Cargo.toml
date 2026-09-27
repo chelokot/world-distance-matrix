@@ -31,7 +31,7 @@ panic = "unwind"
 
 [profile.web]
 inherits = "release"
-opt-level = "z"
+opt-level = 3
 panic = "abort"
 debug = false
 strip = true

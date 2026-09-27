@@ -118,7 +118,7 @@ A single self-contained HTML file (`web/dist/matrix-demo.html`, built by `web/bu
 `dm-web` crate compiled to WebAssembly, embedded gzip-compressed). It spreads evenly spaced points over Eurasia that
 are connected with Frankfurt by road, requests their matrix in any of the three formats, and shows where the time went:
 connection, the way to the server, queue, snapping and search setup, computing rows, the way back, download and
-decoding in the browser. Two clicked points show their distance and time next to the straight line, with a link to
+decoding in the browser, which happens piece by piece while the answer is still arriving. Two clicked points show their distance and time next to the straight line, with a link to
 the same route in Google Maps. The page also works opened from disk; the API allows cross-origin calls and exposes
 its timings to browsers.
 

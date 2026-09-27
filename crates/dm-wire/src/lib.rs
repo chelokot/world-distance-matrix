@@ -21,29 +21,6 @@ impl DecodedMatrix {
     }
 }
 
-struct Reader<'a> {
-    body: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
-        if self.offset + len > self.body.len() {
-            return Err("body is truncated".into());
-        }
-        self.offset += len;
-        Ok(&self.body[self.offset - len..self.offset])
-    }
-
-    fn words(&mut self, count: usize) -> Result<Vec<u32>, String> {
-        Ok(self.take(4 * count)?.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect())
-    }
-
-    fn word(&mut self) -> Result<u32, String> {
-        Ok(self.words(1)?[0])
-    }
-
-    fn finished(&self) -> bool {
-        self.offset == self.body.len()
-    }
+fn words(bytes: &[u8]) -> Vec<u32> {
+    bytes.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect()
 }

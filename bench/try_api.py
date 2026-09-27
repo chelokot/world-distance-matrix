@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import http.client
+import io
 import json
 import math
 import random
@@ -51,7 +52,7 @@ def near_roads(connection: http.client.HTTPConnection, count: int, rng: random.R
     return found[:count], tried
 
 
-def decode_compact(response: http.client.HTTPResponse):
+def decode_compact(response: io.BytesIO):
     import numpy as np
     from compression import zstd
 
@@ -88,7 +89,7 @@ def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -
     response = post(connection, payload, format)
     server = response.getheader("server-timing", "")
     if format == "compact":
-        distances, _, size, (queue, prepare, compute) = decode_compact(response)
+        distances, _, size, (queue, prepare, compute) = decode_compact(io.BytesIO(response.read()))
         unreachable = int((distances == NO_ROUTE).sum())
         server = f"queue {queue:.1f} ms, snapping and setup {prepare:.1f} ms, all rows {compute:.1f} ms"
     elif format == "binary":

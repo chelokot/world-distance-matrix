@@ -1,16 +1,17 @@
 use std::cell::RefCell;
 use std::io::Read;
 
-use dm_wire::compact::ServerTimes;
+use dm_wire::compact::{CompactDecoder, ServerTimes};
 use dm_wire::{binary, compact, DecodedMatrix, NO_ROUTE};
 
+fn decompress_frame(frame: &[u8], len: usize) -> Result<Vec<u8>, String> {
+    let mut payload = Vec::with_capacity(len);
+    ruzstd::decoding::StreamingDecoder::new(frame).map_err(|e| e.to_string())?.read_to_end(&mut payload).map_err(|e| e.to_string())?;
+    Ok(payload)
+}
+
 pub fn decode_compact(body: &[u8]) -> Result<(DecodedMatrix, ServerTimes), String> {
-    compact::decode(body, |frame, len| {
-        let mut payload = Vec::with_capacity(len);
-        let mut decoder = ruzstd::decoding::StreamingDecoder::new(frame).map_err(|e| e.to_string())?;
-        decoder.read_to_end(&mut payload).map_err(|e| e.to_string())?;
-        Ok(payload)
-    })
+    compact::decode(body, decompress_frame)
 }
 
 pub fn in_eurasia(lat: f64, lon: f64) -> bool {
@@ -70,6 +71,7 @@ pub fn summarize(matrix: &DecodedMatrix) -> [f64; 5] {
 #[derive(Default)]
 struct State {
     input: Vec<u8>,
+    stream: CompactDecoder,
     matrix: DecodedMatrix,
     times: [u32; 3],
     points: Vec<f64>,
@@ -89,20 +91,34 @@ pub extern "C" fn input(len: usize) -> *mut u8 {
 }
 
 #[no_mangle]
-pub extern "C" fn decode(format_is_compact: u32) -> u32 {
-    STATE.with_borrow_mut(|state| {
-        let decoded = if format_is_compact == 1 {
-            decode_compact(&state.input).map(|(matrix, times)| (matrix, [times.queue_us, times.prepare_us, times.compute_us]))
-        } else {
-            binary::decode(&state.input).map(|matrix| (matrix, [0; 3]))
-        };
-        match decoded {
-            Ok((matrix, times)) => {
-                (state.matrix, state.times) = (matrix, times);
-                1
-            }
-            Err(_) => 0,
+pub extern "C" fn decode_binary() -> u32 {
+    STATE.with_borrow_mut(|state| match binary::decode(&state.input) {
+        Ok(matrix) => {
+            (state.matrix, state.times) = (matrix, [0; 3]);
+            1
         }
+        Err(_) => 0,
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn stream_start() {
+    STATE.with_borrow_mut(|state| state.stream = CompactDecoder::default())
+}
+
+#[no_mangle]
+pub extern "C" fn stream_feed() -> u32 {
+    STATE.with_borrow_mut(|state| state.stream.feed(&state.input, &mut decompress_frame).is_ok() as u32)
+}
+
+#[no_mangle]
+pub extern "C" fn stream_finish() -> u32 {
+    STATE.with_borrow_mut(|state| match std::mem::take(&mut state.stream).finish() {
+        Ok((matrix, times)) => {
+            (state.matrix, state.times) = (matrix, [times.queue_us, times.prepare_us, times.compute_us]);
+            1
+        }
+        Err(_) => 0,
     })
 }
 

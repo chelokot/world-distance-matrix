@@ -30,7 +30,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .segmented button { border: 0; border-radius: 0; padding: 0.4rem 0.65rem; }
 .segmented button.on { background: var(--ground); font-weight: 600; }
 .total { display: flex; align-items: baseline; gap: 0.5rem; margin-top: 0.9rem; }
-.total span { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.total strong { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; white-space: nowrap; }
 #timeline { display: grid; gap: 0.3rem; margin-top: 0.6rem; }
 .lane { display: grid; grid-template-columns: 9.5rem 1fr; gap: 0.5rem; align-items: center; font-size: 0.75rem; color: var(--muted); }
 .track { position: relative; height: 0.7rem; background: var(--ground); border-radius: 0.2rem; }
@@ -72,7 +72,7 @@ a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; bo
     </div>
     <p id="run-status" class="note"></p>
     <div id="result" hidden>
-      <div class="total"><span id="total"></span><span class="note">end to end, request sent to matrix decoded</span></div>
+      <div class="total"><strong id="total"></strong><span class="note">end to end, request sent to matrix decoded</span></div>
       <div id="timeline"></div>
       <table><tbody id="stages"></tbody></table>
       <p id="facts" class="note"></p>
@@ -225,10 +225,28 @@ async function compute() {
     performance.clearResourceTimings();
     const response = await post(url, body, MEDIA[format]);
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-    const payload = await response.arrayBuffer();
-    const received = performance.now();
-    let server;
-    if (format === "json") {
+    let server, received, wireBytes = 0;
+    if (format === "compact") {
+      wasm.stream_start();
+      let decoding = 0;
+      for (const reader = response.body.getReader(); ;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const started = performance.now();
+        view(Uint8Array, wasm.input(value.length), value.length).set(value);
+        if (!wasm.stream_feed()) throw new Error("the response could not be decoded");
+        decoding += performance.now() - started;
+        wireBytes += value.length;
+      }
+      received = performance.now();
+      if (!wasm.stream_finish()) throw new Error("the response ended early");
+      const [queue, prepare, total] = Array.from(view(Uint32Array, wasm.server_times(), 3), (us) => us / 1000);
+      server = { queue, prepare, beforeFirstByte: queue + prepare, compute: total, decoding };
+      matrix = { rows: points.length, cols: points.length, received, decoded: performance.now() };
+    } else if (format === "json") {
+      const payload = await response.arrayBuffer();
+      received = performance.now();
+      wireBytes = payload.byteLength;
       const parsed = JSON.parse(new TextDecoder().decode(payload));
       const decoded = performance.now();
       const timing = serverTiming(response.headers.get("server-timing"));
@@ -240,22 +258,18 @@ async function compute() {
       parsed.distances.forEach((row, i) => row.forEach((value, j) => { distances[i * matrix.cols + j] = value ?? NO_ROUTE; }));
       parsed.times.forEach((row, i) => row.forEach((value, j) => { durations[i * matrix.cols + j] = value ?? NO_ROUTE; }));
     } else {
+      const payload = await response.arrayBuffer();
+      received = performance.now();
+      wireBytes = payload.byteLength;
       const incoming = new Uint8Array(payload);
       view(Uint8Array, wasm.input(incoming.length), incoming.length).set(incoming);
-      if (!wasm.decode(format === "compact" ? 1 : 0)) throw new Error("the response could not be decoded");
-      const decoded = performance.now();
+      if (!wasm.decode_binary()) throw new Error("the response could not be decoded");
       const header = new DataView(payload);
-      const [rows, cols] = format === "compact" ? [header.getUint32(4, true), header.getUint32(8, true)] : [header.getUint32(8, true), header.getUint32(12, true)];
-      matrix = { rows, cols, received, decoded };
-      if (format === "compact") {
-        const [queue, prepare, total] = Array.from(view(Uint32Array, wasm.server_times(), 3), (us) => us / 1000);
-        server = { queue, prepare, beforeFirstByte: queue + prepare, compute: total };
-      } else {
-        server = { queue: serverTiming(response.headers.get("server-timing")).queue };
-      }
+      matrix = { rows: header.getUint32(8, true), cols: header.getUint32(12, true), received, decoded: performance.now() };
+      server = { queue: serverTiming(response.headers.get("server-timing")).queue };
     }
     const entry = performance.getEntriesByName(url).at(-1);
-    render(entry, server, payload.byteLength);
+    render(entry, server, wireBytes);
     $("run-status").textContent = "";
     showPair();
   } catch (error) {
@@ -293,7 +307,12 @@ function render(entry, server, decodedBytes) {
     stages.push(["Request → first byte", "travel", requestStart, responseStart, "network round trip plus server work before the first row (binary does not report its split)"]);
   }
   stages.push(["Download", "download", responseStart, responseEnd, "first to last byte of the answer"]);
-  stages.push([decodeLabel, "decode", decodeStart, decodeEnd, format === "json" ? "JSON.parse in the browser" : "Rust in the browser: zstd, prediction, reordering"]);
+  if (format === "compact") {
+    stages.push(["Decode on arrival", "decode", responseStart, responseStart + server.decoding, "Rust in the browser decodes each piece as it arrives (zstd, prediction, reordering), inside the download"]);
+    stages.push(["Finish decoding", "decode", decodeStart, decodeEnd, "after the last byte: nothing left but checking the end"]);
+  } else {
+    stages.push([decodeLabel, "decode", decodeStart, decodeEnd, format === "json" ? "JSON.parse in the browser" : "Rust in the browser: split the rows into two matrices"]);
+  }
   const total = decodeEnd;
   $("result").hidden = false;
   $("total").textContent = ms(total);
