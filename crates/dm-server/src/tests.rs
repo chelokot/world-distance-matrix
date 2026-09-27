@@ -6,8 +6,9 @@ use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use dm_build::{build, BuildConfig};
+use dm_core::geo::Coord;
 use dm_core::network::Network;
-use dm_core::snap::SnapConfig;
+use dm_core::snap::{snap, SnapConfig};
 use dm_core::store::Residency;
 use dm_core::wire::{decode_binary, BINARY_CONTENT_TYPE};
 use http_body_util::BodyExt;
@@ -91,7 +92,7 @@ async fn health_reports_the_dataset() {
     assert_eq!(status, StatusCode::OK);
     let value: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["status"], "ok");
-    assert_eq!(value["dataset"]["profile"], "car-v1");
+    assert_eq!(value["dataset"]["profile"], "car-v2");
 }
 
 #[tokio::test]
@@ -165,6 +166,25 @@ async fn duplicates_are_free_and_unroutable_points_are_null() {
         assert_eq!(times[other][2], None);
     }
     assert!(distances[0][3].is_some());
+}
+
+#[tokio::test]
+async fn off_road_points_pay_for_the_way_to_the_road() {
+    let network = Network::open(dataset(), Residency::OnDemand).expect("opening fixture");
+    let (point, snapped) = kiel_points(400)
+        .into_iter()
+        .find_map(|(lat, lon)| {
+            snap(&network, Coord::from_degrees(lat, lon), &SnapConfig::default()).filter(|s| (60.0..400.0).contains(&s.distance_m)).map(|s| ((lat, lon), s))
+        })
+        .expect("an off-road point in the fixture");
+    let neighbour = (point.0 + 1e-6, point.1);
+    let (status, _, body) = call(app(), "POST", "/matrix", body_for(&[point, neighbour], json!({})), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (distances, times) = json_matrix(&body);
+    let shorter = |m: &JsonMatrix| m[0][1].unwrap().min(m[1][0].unwrap()) as f64;
+    let to_road_and_back_m = 2.0 * snapped.distance_m;
+    assert!((shorter(&distances) - to_road_and_back_m).abs() <= 2.0, "{distances:?} vs {to_road_and_back_m} m");
+    assert!((shorter(&times) - to_road_and_back_m * 3.6 / 15.0).abs() <= 2.0, "{times:?} vs {to_road_and_back_m} m at 15 km/h");
 }
 
 #[tokio::test]

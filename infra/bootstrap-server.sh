@@ -9,9 +9,6 @@ if ! command -v aws >/dev/null; then
   (cd /tmp && unzip -q awscli.zip && ./aws/install)
 fi
 mkdir -p /opt/dm-release
-aws s3 cp --only-show-errors "s3://$BUCKET/releases/dm-server" /opt/dm-release/dm-server
 aws s3 cp --only-show-errors --recursive "s3://$BUCKET/releases/deploy" /opt/dm-release/deploy
-mkdir -p /opt/dm/data
-aws s3 cp --only-show-errors --recursive "s3://$BUCKET/datasets/$DATASET" "/opt/dm/data/$DATASET"
-chmod +x /opt/dm-release/deploy/install.sh
-/opt/dm-release/deploy/install.sh /opt/dm-release/dm-server "/opt/dm/data/$DATASET"
+chmod +x /opt/dm-release/deploy/*.sh
+/opt/dm-release/deploy/upgrade.sh "$DATASET"

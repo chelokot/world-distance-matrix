@@ -10,3 +10,5 @@ __pycache__/
 .prod-id
 .prod-private-ip
 .claude/
+.eip
+.dev-id

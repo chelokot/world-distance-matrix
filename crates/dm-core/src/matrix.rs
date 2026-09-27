@@ -6,38 +6,40 @@ use rustc_hash::FxHashMap;
 use crate::geo::Coord;
 use crate::network::Network;
 use crate::search::{Direction, UpwardSearch};
-use crate::snap::Placement;
+use crate::snap::Snap;
 use crate::weight::{scale, RouteValue, Weight, UNREACHABLE};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Endpoint {
     pub coord: Coord,
-    pub placement: Option<Placement>,
+    pub snap: Option<Snap>,
 }
 
 type Seeds = Vec<(u32, Weight)>;
 
-fn source_seeds(network: &Network, placement: Placement) -> Seeds {
+fn source_seeds(network: &Network, snap: Snap) -> Seeds {
+    let (placement, access) = (snap.placement, snap.access_leg());
     let chain = placement.chain;
     let (tail, head) = (network.chains.tail[chain as usize], network.chains.head[chain as usize]);
     let cost = network.chains.cost[chain as usize];
     let turns = &network.turns;
-    let forward = cost.forward().map(|w| (turns.arrival(chain, false).unwrap_or(head), scale(w, 1.0 - placement.fraction)));
-    let backward = cost.backward().map(|w| (turns.arrival(chain, true).unwrap_or(tail), scale(w, placement.fraction)));
+    let forward = cost.forward().map(|w| (turns.arrival(chain, false).unwrap_or(head), scale(w, 1.0 - placement.fraction) + access));
+    let backward = cost.backward().map(|w| (turns.arrival(chain, true).unwrap_or(tail), scale(w, placement.fraction) + access));
     forward.into_iter().chain(backward).collect()
 }
 
-fn target_seeds(network: &Network, placement: Placement) -> Seeds {
+fn target_seeds(network: &Network, snap: Snap) -> Seeds {
+    let (placement, access) = (snap.placement, snap.access_leg());
     let chain = placement.chain;
     let (tail, head) = (network.chains.tail[chain as usize], network.chains.head[chain as usize]);
     let cost = network.chains.cost[chain as usize];
     let turns = &network.turns;
     let forward = cost.forward().into_iter().flat_map(|w| {
-        let partial = scale(w, placement.fraction);
+        let partial = scale(w, placement.fraction) + access;
         std::iter::once(tail).chain(turns.departures(chain, false)).map(move |node| (node, partial))
     });
     let backward = cost.backward().into_iter().flat_map(|w| {
-        let partial = scale(w, 1.0 - placement.fraction);
+        let partial = scale(w, 1.0 - placement.fraction) + access;
         std::iter::once(head).chain(turns.departures(chain, true)).map(move |node| (node, partial))
     });
     forward.chain(backward).collect()
@@ -98,8 +100,8 @@ impl Buckets {
     fn build(network: &Network, targets: &[Endpoint]) -> Self {
         let spaces: Vec<Vec<(u32, Weight)>> = targets
             .par_iter()
-            .map_init(UpwardSearch::default, |search, target| match target.placement {
-                Some(placement) => search.run(&network.hierarchy, &target_seeds(network, placement), Direction::Backward).to_vec(),
+            .map_init(UpwardSearch::default, |search, target| match target.snap {
+                Some(snap) => search.run(&network.hierarchy, &target_seeds(network, snap), Direction::Backward).to_vec(),
                 None => Vec::new(),
             })
             .collect();
@@ -150,16 +152,16 @@ pub struct MatrixJob<'n> {
     sources: Vec<Endpoint>,
     targets: Vec<Endpoint>,
     buckets: Buckets,
-    targets_by_chain: FxHashMap<u32, Vec<(u32, f64)>>,
+    targets_by_chain: FxHashMap<u32, Vec<(u32, Snap)>>,
 }
 
 impl<'n> MatrixJob<'n> {
     pub fn prepare(network: &'n Network, sources: Vec<Endpoint>, targets: Vec<Endpoint>) -> Self {
         let buckets = Buckets::build(network, &targets);
-        let mut targets_by_chain: FxHashMap<u32, Vec<(u32, f64)>> = FxHashMap::default();
+        let mut targets_by_chain: FxHashMap<u32, Vec<(u32, Snap)>> = FxHashMap::default();
         for (index, target) in targets.iter().enumerate() {
-            if let Some(placement) = target.placement {
-                targets_by_chain.entry(placement.chain).or_default().push((index as u32, placement.fraction));
+            if let Some(snap) = target.snap {
+                targets_by_chain.entry(snap.placement.chain).or_default().push((index as u32, snap));
             }
         }
         Self { network, sources, targets, buckets, targets_by_chain }
@@ -175,24 +177,21 @@ impl<'n> MatrixJob<'n> {
 
     fn row(&self, search: &mut UpwardSearch, source: &Endpoint, row: &mut [Weight]) {
         row.fill(UNREACHABLE);
-        match source.placement {
-            Some(placement) => {
-                let space = search.run(&self.network.hierarchy, &source_seeds(self.network, placement), Direction::Forward);
-                for &(node, distance) in space {
-                    self.buckets.scan(node, distance, row);
-                }
-                for &(target, fraction) in self.targets_by_chain.get(&placement.chain).into_iter().flatten() {
-                    let direct = along_chain(self.network, placement.fraction, fraction, placement.chain);
-                    let cell = &mut row[target as usize];
-                    *cell = (*cell).min(direct);
-                }
+        if let Some(snap) = source.snap {
+            let space = search.run(&self.network.hierarchy, &source_seeds(self.network, snap), Direction::Forward);
+            for &(node, distance) in space {
+                self.buckets.scan(node, distance, row);
             }
-            None => {
-                for (cell, target) in row.iter_mut().zip(&self.targets) {
-                    if target.coord == source.coord {
-                        *cell = 0;
-                    }
-                }
+            let (placement, access) = (snap.placement, snap.access_leg());
+            for &(target, target_snap) in self.targets_by_chain.get(&placement.chain).into_iter().flatten() {
+                let direct = along_chain(self.network, placement.fraction, target_snap.placement.fraction, placement.chain) + access + target_snap.access_leg();
+                let cell = &mut row[target as usize];
+                *cell = (*cell).min(direct);
+            }
+        }
+        for (cell, target) in row.iter_mut().zip(&self.targets) {
+            if target.coord == source.coord {
+                *cell = 0;
             }
         }
     }

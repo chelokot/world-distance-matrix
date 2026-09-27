@@ -1,4 +1,4 @@
-pub const PROFILE_NAME: &str = "car-v1";
+pub const PROFILE_NAME: &str = "car-v2";
 pub const TRAFFIC_SIGNAL_PENALTY_MS: u32 = 2_000;
 const MAXSPEED_FACTOR: f64 = 0.8;
 const UNPAVED_SPEED_CAP_KMH: f64 = 30.0;
@@ -54,6 +54,7 @@ fn default_speed_kmh(highway: &str) -> Option<f64> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Access {
     Allowed,
+    Destination,
     Denied,
     Unspecified,
 }
@@ -62,8 +63,11 @@ fn access_value(value: &str) -> Access {
     let denied = |part: &str| {
         matches!(part.trim(), "no" | "private" | "agricultural" | "forestry" | "emergency" | "psv" | "bus" | "military" | "permit" | "use_sidepath")
     };
+    let destination = |part: &str| denied(part) || matches!(part.trim(), "destination" | "delivery" | "customers");
     if value.split(';').all(denied) {
         Access::Denied
+    } else if value.split(';').all(destination) {
+        Access::Destination
     } else {
         Access::Allowed
     }
@@ -229,8 +233,12 @@ fn directions(tags: &Tags) -> Option<(bool, bool)> {
 
 pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
     if matches!(tags.route, Some("ferry" | "shuttle_train")) {
-        let explicitly_allowed =
-            [tags.motorcar, tags.motor_vehicle, tags.vehicle, tags.hgv, tags.access].into_iter().flatten().next().map(access_value) == Some(Access::Allowed);
+        let explicitly_allowed = [tags.motorcar, tags.motor_vehicle, tags.vehicle, tags.hgv, tags.access]
+            .into_iter()
+            .flatten()
+            .next()
+            .map(access_value)
+            .is_some_and(|access| matches!(access, Access::Allowed | Access::Destination));
         if tags.route == Some("ferry") && !explicitly_allowed || tags.car_access() == Access::Denied {
             return None;
         }
@@ -247,7 +255,9 @@ pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
     if tags.area == Some("yes") || tags.impassable == Some("yes") || tags.car_access() == Access::Denied {
         return None;
     }
-    if highway == "service" && matches!(tags.service, Some("parking_aisle" | "driveway" | "drive-through" | "emergency_access")) {
+    if highway == "service"
+        && (matches!(tags.service, Some("parking_aisle" | "driveway" | "drive-through" | "emergency_access")) || tags.car_access() == Access::Destination)
+    {
         return None;
     }
     let (forward, backward) = directions(tags)?;
@@ -315,7 +325,7 @@ pub fn node_traits(tags: &Tags) -> NodeTraits {
         );
         match tags.car_access() {
             Access::Denied => true,
-            Access::Allowed => false,
+            Access::Allowed | Access::Destination => false,
             Access::Unspecified => !passable_kind,
         }
     });
@@ -347,6 +357,9 @@ mod tests {
         assert!(profile(&[("highway", "service"), ("service", "alley")]).is_some());
         assert!(profile(&[("highway", "residential"), ("access", "agricultural;forestry")]).is_none());
         assert!(profile(&[("highway", "residential"), ("access", "destination;delivery")]).is_some());
+        assert!(profile(&[("highway", "service"), ("access", "customers")]).is_none());
+        assert!(profile(&[("highway", "service"), ("motor_vehicle", "agricultural;destination")]).is_none());
+        assert!(profile(&[("highway", "service"), ("access", "no"), ("motor_vehicle", "yes")]).is_some());
     }
 
     #[test]
@@ -423,6 +436,7 @@ mod tests {
         assert!(traits(&[("barrier", "bollard")]).blocks_cars);
         assert!(!traits(&[("barrier", "bollard"), ("motor_vehicle", "yes")]).blocks_cars);
         assert!(!traits(&[("barrier", "gate")]).blocks_cars);
+        assert!(!traits(&[("barrier", "bollard"), ("motor_vehicle", "destination")]).blocks_cars);
         assert!(traits(&[("barrier", "gate"), ("access", "private")]).blocks_cars);
         assert!(!traits(&[("highway", "crossing")]).blocks_cars);
         assert!(traits(&[("highway", "traffic_signals")]).traffic_signal);

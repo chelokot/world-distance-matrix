@@ -45,8 +45,8 @@ fn reference_graph(network: &Network, endpoints: &[Endpoint]) -> ReferenceGraph 
     let turns = &network.turns;
     let mut on_chain: HashMap<u32, Vec<(f64, usize)>> = HashMap::new();
     for (index, endpoint) in endpoints.iter().enumerate() {
-        if let Some(p) = endpoint.placement {
-            on_chain.entry(p.chain).or_default().push((p.fraction, index));
+        if let Some(snap) = endpoint.snap {
+            on_chain.entry(snap.placement.chain).or_default().push((snap.placement.fraction, index));
         }
     }
     let mut point_node = vec![None; endpoints.len()];
@@ -184,6 +184,7 @@ pub fn verify(network: &Network, endpoints: &[Endpoint], reference_sources: usiz
     let matrix = engine_matrix(network, endpoints);
     let graph = reference_graph(network, endpoints);
     let n = endpoints.len();
+    let access: Vec<Weight> = endpoints.iter().map(|e| e.snap.map_or(0, |s| s.access_leg())).collect();
     let targets: Vec<Option<u32>> = graph.point_node.clone();
     let rows: Vec<(usize, Vec<Weight>)> = (0..n.min(reference_sources))
         .into_par_iter()
@@ -199,8 +200,11 @@ pub fn verify(network: &Network, endpoints: &[Endpoint], reference_sources: usiz
     for (source, row) in rows {
         for (target, &weight) in row.iter().enumerate() {
             report.pairs += 1;
-            let expected =
-                if endpoints[source].coord == endpoints[target].coord { RouteValue { distance_m: 0, duration_s: 0 } } else { RouteValue::from_weight(weight) };
+            let expected = if endpoints[source].coord == endpoints[target].coord {
+                RouteValue { distance_m: 0, duration_s: 0 }
+            } else {
+                RouteValue::from_weight(weight + access[source] + access[target])
+            };
             let actual = matrix.at(source, target);
             if expected == actual {
                 report.exact += 1;

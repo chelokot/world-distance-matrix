@@ -131,7 +131,7 @@ fn sample(pool: &[Coord], size: usize, seed: u64) -> Vec<Coord> {
 
 fn endpoints(network: &Network, coords: &[Coord]) -> Vec<Endpoint> {
     let config = SnapConfig::default();
-    coords.par_iter().map(|&coord| Endpoint { coord, placement: snap(network, coord, &config).map(|s| s.placement) }).collect()
+    coords.par_iter().map(|&coord| Endpoint { coord, snap: snap(network, coord, &config) }).collect()
 }
 
 fn percentile(sorted: &[Duration], p: f64) -> f64 {
@@ -232,7 +232,7 @@ fn main() -> Result<()> {
             let pool = points::read_csv(&points)?;
             let endpoints = endpoints(&network, &sample(&pool, size, 42));
             let seeds = |e: &Endpoint, forward: bool| -> Vec<(u32, u64)> {
-                let Some(p) = e.placement else { return Vec::new() };
+                let Some(p) = e.snap.map(|s| s.placement) else { return Vec::new() };
                 let c = p.chain as usize;
                 let cost = network.chains.cost[c];
                 let (t, h) = (network.chains.tail[c], network.chains.head[c]);

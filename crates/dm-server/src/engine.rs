@@ -140,9 +140,8 @@ impl Engine {
     }
 
     fn prepare(&self, spec: &MatrixSpec) -> MatrixJob<'_> {
-        let endpoints: Vec<Endpoint> =
-            spec.coords.par_iter().map(|&coord| Endpoint { coord, placement: snap(&self.network, coord, &self.snap).map(|s| s.placement) }).collect();
-        self.metrics.unsnapped_points.inc_by(endpoints.iter().filter(|e| e.placement.is_none()).count() as u64);
+        let endpoints: Vec<Endpoint> = spec.coords.par_iter().map(|&coord| Endpoint { coord, snap: snap(&self.network, coord, &self.snap) }).collect();
+        self.metrics.unsnapped_points.inc_by(endpoints.iter().filter(|e| e.snap.is_none()).count() as u64);
         let pick = |indices: &[usize]| indices.iter().map(|&i| endpoints[i]).collect();
         MatrixJob::prepare(&self.network, pick(&spec.sources), pick(&spec.destinations))
     }

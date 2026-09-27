@@ -1,5 +1,8 @@
 use crate::geo::{project_origin_onto_segment, Coord, LocalFrame, Point};
 use crate::network::Network;
+use crate::weight::{pack, Weight};
+
+const ACCESS_SPEED_KMH: f64 = 15.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SnapConfig {
@@ -23,6 +26,12 @@ pub struct Placement {
 pub struct Snap {
     pub placement: Placement,
     pub distance_m: f64,
+}
+
+impl Snap {
+    pub fn access_leg(&self) -> Weight {
+        pack((self.distance_m * 3600.0 / ACCESS_SPEED_KMH).round() as u32, (self.distance_m * 10.0).round() as u32)
+    }
 }
 
 #[derive(Clone, Copy)]
