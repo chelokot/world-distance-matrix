@@ -1,0 +1,15 @@
+instance 0: ours/osrm duration ratio median 0.985, p5 0.914, p95 1.005
+instance 1: ours/osrm duration ratio median 0.985, p5 0.920, p95 1.006
+instance 2: ours/osrm duration ratio median 0.986, p5 0.927, p95 1.004
+instance 3: ours/osrm duration ratio median 0.988, p5 0.932, p95 1.006
+variant                             travel vs truth-planned  seed spread  lateness/plan  plans on time
+osrm (truth)                                         +0.00%        0.11%         0.0 min           100%
+ours                                                 -0.25%        1.04%         4.2 min            31%
+ours x median bias                                   -0.08%        1.07%         2.8 min            31%
+symmetrised truth                                    +0.91%        0.60%         0.1 min            81%
+straight line / median speed                         +5.95%        4.86%        46.9 min             0%
+truth x lognormal noise 1%                           -0.00%        0.33%         0.0 min            94%
+truth x lognormal noise 2%                           +0.13%        0.18%         0.0 min           100%
+truth x lognormal noise 5%                           +0.51%        0.38%         0.1 min            69%
+truth x lognormal noise 10%                          +1.71%        0.98%         4.3 min            19%
+truth x lognormal noise 20%                          +7.28%        1.53%        13.5 min             0%

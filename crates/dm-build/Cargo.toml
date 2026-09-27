@@ -1,0 +1,18 @@
+[package]
+name = "dm-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dm-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+osmpbf = "0.3"
+rayon.workspace = true
+rustc-hash.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

@@ -1,0 +1,19 @@
+[
+  {
+    "bytes": 800000016,
+    "concurrency": 1,
+    "decode_p50_ms": 484.761102,
+    "format": "Binary",
+    "label": "germany",
+    "requests": 6,
+    "shape": "Square",
+    "size": 10000,
+    "throughput_rps": 0.3712009810966654,
+    "total_p50_ms": 2537.119287,
+    "total_p99_ms": 3145.2468029999995,
+    "ttlb_max_ms": 2653.2124719999997,
+    "ttlb_p50_ms": 2046.343613,
+    "ttlb_p90_ms": 2653.2124719999997,
+    "ttlb_p99_ms": 2653.2124719999997
+  }
+]

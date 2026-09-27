@@ -1,0 +1,27 @@
+[Unit]
+Description=Road distance matrix service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dm
+Group=dm
+EnvironmentFile=/etc/dm-server.env
+ExecStart=/opt/dm/bin/dm-server
+Restart=always
+RestartSec=2
+TimeoutStopSec=60
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ReadOnlyPaths=/opt/dm
+
+[Install]
+WantedBy=multi-user.target

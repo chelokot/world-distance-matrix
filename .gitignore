@@ -1,0 +1,11 @@
+/target
+.aws-credentials
+.ssh/
+.dev-ip
+*.pem
+/results/raw/
+__pycache__/
+.venv/
+.dev-ip
+.prod-id
+.prod-private-ip
