@@ -7,7 +7,7 @@ use dm_core::geo::Coord;
 use osmpbf::{BlobDecode, BlobReader, PrimitiveBlock, RelMemberType};
 use rayon::prelude::*;
 
-use crate::profile::{node_traits, turn_rule, way_profile, Tags, TurnRule, WayProfile};
+use crate::profile::{node_traits, turn_rule, way_profile, Day, Tags, TurnRule, WayProfile};
 
 pub struct Ways {
     pub profiles: Vec<WayProfile>,
@@ -117,12 +117,12 @@ struct RawWays {
     restrictions: Vec<RawRestriction>,
 }
 
-fn read_ways(path: &Path) -> Result<RawWays> {
+fn read_ways(path: &Path, today: Day) -> Result<RawWays> {
     let batches = for_each_block(path, |block| {
         let mut batch = WayBatch { ids: Vec::new(), profiles: Vec::new(), ref_counts: Vec::new(), refs: Vec::new(), restrictions: Vec::new() };
         for group in block.groups() {
             for way in group.ways() {
-                let Some(profile) = way_profile(&Tags::collect(way.tags())) else { continue };
+                let Some(profile) = way_profile(&Tags::collect(way.tags()), today) else { continue };
                 let before = batch.refs.len();
                 batch.refs.extend(way.refs());
                 if batch.refs.len() - before < 2 {
@@ -228,10 +228,10 @@ fn join_across_antimeridian(refs: &mut [u32], restrictions: &mut [Restriction], 
     restrictions.iter_mut().for_each(|restriction| restriction.via = joined(restriction.via));
 }
 
-pub fn read(path: &Path) -> Result<OsmExtract> {
+pub fn read(path: &Path, today: Day) -> Result<OsmExtract> {
     let replication_timestamp = replication_timestamp(path)?;
     let started = std::time::Instant::now();
-    let raw = read_ways(path)?;
+    let raw = read_ways(path, today)?;
     tracing::info!(
         ways = raw.profiles.len(),
         refs = raw.refs.len(),

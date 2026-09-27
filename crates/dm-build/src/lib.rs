@@ -16,6 +16,7 @@ pub struct BuildConfig {
     pub witness_settle_limit: usize,
     pub major_component_min_nodes: u32,
     pub simplify_tolerance_m: f64,
+    pub today: profile::Day,
 }
 
 fn peak_memory_gib() -> f64 {
@@ -28,7 +29,7 @@ fn peak_memory_gib() -> f64 {
 pub fn build(args: &BuildConfig) -> Result<()> {
     let started = Instant::now();
 
-    let extract = osm::read(&args.input)?;
+    let extract = osm::read(&args.input, args.today)?;
     let mut topology = topology::build(&extract);
     let source = format!(
         "{} (replication timestamp {})",

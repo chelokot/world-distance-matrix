@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
+use dm_build::profile::Day;
 use dm_build::{build, BuildConfig};
 
 #[derive(Parser)]
@@ -28,5 +29,6 @@ fn main() -> Result<()> {
         witness_settle_limit: args.witness_settle_limit,
         major_component_min_nodes: args.major_component_min_nodes,
         simplify_tolerance_m: args.simplify_tolerance_m,
+        today: Day::from_unix_days(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() / 86_400),
     })
 }

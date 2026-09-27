@@ -55,6 +55,62 @@ fn default_speed_kmh(highway: &str) -> Option<f64> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Day {
+    pub month: u8,
+    pub day: u8,
+}
+
+impl Day {
+    pub fn from_unix_days(days: u64) -> Day {
+        let z = days + 719_468;
+        let day_of_era = z % 146_097;
+        let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let shifted_month = (5 * day_of_year + 2) / 153;
+        let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u8;
+        let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 } as u8;
+        Day { month, day }
+    }
+
+    fn parse(text: &str, end_of_month: bool) -> Option<Day> {
+        const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+        let mut parts = text.split_whitespace();
+        let name = parts.next()?;
+        let month = MONTHS.iter().position(|month| month.eq_ignore_ascii_case(name))? as u8 + 1;
+        let day = match parts.next() {
+            Some(day) => day.parse().ok().filter(|day| (1..=31).contains(day))?,
+            None if end_of_month => 31,
+            None => 1,
+        };
+        parts.next().is_none().then_some(Day { month, day })
+    }
+}
+
+fn date_ranges(condition: &str) -> Option<Vec<(Day, Day)>> {
+    let condition = condition.trim();
+    let inner = condition.strip_prefix('(').and_then(|c| c.strip_suffix(')')).unwrap_or(condition);
+    inner
+        .split(',')
+        .map(|range| {
+            let (from, to) = range.split_once('-')?;
+            Some((Day::parse(from, false)?, Day::parse(to, true)?))
+        })
+        .collect()
+}
+
+fn closed_on(tags: &Tags, today: Day) -> bool {
+    let within = |(from, to): (Day, Day)| if from <= to { from <= today && today <= to } else { today >= from || today <= to };
+    [tags.motorcar_conditional, tags.motor_vehicle_conditional, tags.vehicle_conditional, tags.access_conditional]
+        .into_iter()
+        .flatten()
+        .flat_map(|value| value.split(';'))
+        .filter_map(|rule| rule.split_once('@'))
+        .any(|(restriction, condition)| {
+            access_value(restriction) == Access::Denied && date_ranges(condition).is_some_and(|ranges| ranges.into_iter().any(within))
+        })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Access {
     Allowed,
@@ -88,6 +144,10 @@ pub struct Tags<'a> {
     motor_vehicle: Option<&'a str>,
     motorcar: Option<&'a str>,
     hgv: Option<&'a str>,
+    access_conditional: Option<&'a str>,
+    vehicle_conditional: Option<&'a str>,
+    motor_vehicle_conditional: Option<&'a str>,
+    motorcar_conditional: Option<&'a str>,
     maxspeed: Option<&'a str>,
     maxspeed_forward: Option<&'a str>,
     maxspeed_backward: Option<&'a str>,
@@ -120,6 +180,10 @@ impl<'a> Tags<'a> {
                 "motor_vehicle" => &mut collected.motor_vehicle,
                 "motorcar" => &mut collected.motorcar,
                 "hgv" => &mut collected.hgv,
+                "access:conditional" => &mut collected.access_conditional,
+                "vehicle:conditional" => &mut collected.vehicle_conditional,
+                "motor_vehicle:conditional" => &mut collected.motor_vehicle_conditional,
+                "motorcar:conditional" => &mut collected.motorcar_conditional,
                 "maxspeed" => &mut collected.maxspeed,
                 "maxspeed:forward" => &mut collected.maxspeed_forward,
                 "maxspeed:backward" => &mut collected.maxspeed_backward,
@@ -239,7 +303,7 @@ fn directions(tags: &Tags) -> Option<(bool, bool)> {
     }
 }
 
-pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
+pub fn way_profile(tags: &Tags, today: Day) -> Option<WayProfile> {
     if matches!(tags.route, Some("ferry" | "shuttle_train")) {
         let explicitly_allowed = [tags.motorcar, tags.motor_vehicle, tags.vehicle, tags.hgv, tags.access]
             .into_iter()
@@ -247,7 +311,7 @@ pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
             .next()
             .map(access_value)
             .is_some_and(|access| matches!(access, Access::Allowed | Access::Destination));
-        if tags.route == Some("ferry") && !explicitly_allowed || tags.car_access() == Access::Denied {
+        if tags.route == Some("ferry") && !explicitly_allowed || tags.car_access() == Access::Denied || closed_on(tags, today) {
             return None;
         }
         let max_kmh = if tags.route == Some("ferry") { FERRY_MAX_SPEED_KMH } else { CAR_TRAIN_MAX_SPEED_KMH };
@@ -262,7 +326,7 @@ pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
     }
     let highway = tags.highway?;
     let class_speed = default_speed_kmh(highway)?;
-    if tags.area == Some("yes") || tags.impassable == Some("yes") || tags.car_access() == Access::Denied {
+    if tags.area == Some("yes") || tags.impassable == Some("yes") || tags.car_access() == Access::Denied || closed_on(tags, today) {
         return None;
     }
     if highway == "service"
@@ -348,8 +412,10 @@ pub fn node_traits(tags: &Tags) -> NodeTraits {
 mod tests {
     use super::*;
 
+    const SUMMER: Day = Day { month: 7, day: 15 };
+
     fn profile(tags: &[(&str, &str)]) -> Option<WayProfile> {
-        way_profile(&Tags::collect(tags.iter().copied()))
+        way_profile(&Tags::collect(tags.iter().copied()), SUMMER)
     }
 
     fn forward_speed(p: WayProfile) -> f64 {
@@ -422,6 +488,30 @@ mod tests {
         let shuttle = profile(&[("route", "shuttle_train"), ("motorcar", "yes"), ("maxspeed", "100"), ("oneway", "yes")]).unwrap();
         assert_eq!((shuttle.pace, shuttle.backward), (Pace::Speed { forward_kmh: 100.0, backward_kmh: 100.0 }, false));
         assert!(profile(&[("route", "ferry"), ("foot", "yes"), ("vehicle", "no"), ("hgv", "yes")]).is_none());
+    }
+
+    #[test]
+    fn seasonal_closures_apply_on_the_build_day() {
+        let open_on = |tags: &[(&str, &str)], month, day| way_profile(&Tags::collect(tags.iter().copied()), Day { month, day }).is_some();
+        let tremola = [("highway", "secondary"), ("motor_vehicle:conditional", "no @ (Nov-May)")];
+        assert!(!open_on(&tremola, 12, 10) && !open_on(&tremola, 2, 1) && !open_on(&tremola, 5, 31));
+        assert!(open_on(&tremola, 6, 1) && open_on(&tremola, 9, 27) && open_on(&tremola, 10, 31));
+        let late_winter = [("highway", "track"), ("highway", "unclassified"), ("access:conditional", "no @ (Dec 15 - Apr 30)")];
+        assert!(open_on(&late_winter, 12, 14) && !open_on(&late_winter, 12, 15) && !open_on(&late_winter, 4, 30) && open_on(&late_winter, 5, 1));
+        assert!(!open_on(&[("highway", "primary"), ("vehicle:conditional", "no @ (oct-may)")], 10, 1));
+        for ignored in ["no @ (22:00-05:00)", "no @ winter", "discouraged @ (Dec-May)", "no @ (Nov-Dec; Jan-Mar)", "delivery @ (Mo-Sa 07:00-19:00)"] {
+            assert!(open_on(&[("highway", "residential"), ("motor_vehicle:conditional", ignored)], 1, 15), "{ignored}");
+        }
+        let seasonal_ferry = [("route", "ferry"), ("motor_vehicle", "yes"), ("motor_vehicle:conditional", "no @ (Oct-Apr)")];
+        assert!(open_on(&seasonal_ferry, 7, 1) && !open_on(&seasonal_ferry, 1, 1));
+    }
+
+    #[test]
+    fn civil_days_follow_the_gregorian_calendar() {
+        assert_eq!(Day::from_unix_days(0), Day { month: 1, day: 1 });
+        assert_eq!(Day::from_unix_days(11_016), Day { month: 2, day: 29 });
+        assert_eq!(Day::from_unix_days(20_088), Day { month: 12, day: 31 });
+        assert_eq!(Day::from_unix_days(20_723), Day { month: 9, day: 27 });
     }
 
     #[test]

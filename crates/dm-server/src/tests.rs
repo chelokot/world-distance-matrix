@@ -33,6 +33,7 @@ fn dataset() -> &'static Path {
             witness_settle_limit: 500,
             major_component_min_nodes: 100,
             simplify_tolerance_m: 5.0,
+            today: dm_build::profile::Day { month: 7, day: 15 },
         })
         .expect("building the Kiel fixture");
         output

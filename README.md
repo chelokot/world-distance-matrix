@@ -87,13 +87,20 @@ ones are still being computed, so no header could carry them.
 * `[i][j]` is the route from `i` to `j`; matrices are asymmetric (one-way streets, one-way ferries/car trains).
 * The route is the **fastest** route for a car or van; the reported distance is the length of that route. Ties in
   time are broken by shorter distance, so results are deterministic.
-* Each coordinate is attached to the nearest road a car may drive through (within 5 km). The straight line between the
-  coordinate and that road belongs to every route that starts or ends there: its length is part of the distance and it
-  is driven at 15 km/h (a driveway, a yard, parking). Unroutable pairs — a point with no road within 5 km, a car-free
+* Each coordinate is attached to the nearest road a car may drive through and stop on (within 5 km): motorways, their
+  slip roads, expressways, tunnels, ferries and car trains carry routes but never take a point, so a house beside a
+  motorway starts on its own street and a point at sea boards no ship. The straight line between the coordinate and
+  that road belongs to every route that starts or ends there: its length is part of the distance and it is driven at
+  15 km/h (a driveway, a yard, parking). Farm and forest tracks are not routed; a point more than 5 km from any other
+  road is unroutable. Unroutable pairs — a point with no road within 5 km, a car-free
   island, a different continent — are `null` in JSON and `0xFFFFFFFF` in binary. A point to itself (or to an identical
   coordinate) is always `0`.
 * Values are free-flow estimates from OpenStreetMap speed limits and road classes; they contain no live or historical
-  traffic.
+  traffic. Ferries take their tagged `duration`; a duration that would mean an impossible speed (faster than 80 km/h
+  for a ship, 200 km/h for a car train) is a tagging mistake: a bare number is then read as hours instead of minutes
+  when that is plausible, otherwise the ferry runs at 20 km/h. Roads that cross the 180th meridian are continuous.
+  Seasonal closures (Alpine passes tagged `motor_vehicle:conditional=no @ (Nov-May)`) are closed in datasets built
+  during the closure; the weekly rebuild keeps them current. Closures by time of day are not modelled.
 
 Every matrix response carries a `Server-Timing` header with the time the request waited for capacity and, for JSON,
 the server's compute time including encoding: `server-timing: queue;dur=0.1, compute;dur=25.4` (milliseconds). Binary
