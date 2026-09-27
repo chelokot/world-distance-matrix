@@ -129,18 +129,17 @@ Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests
 
 ## Try it
 
-Public instances serve the whole planet, each on one c5a.4xlarge: `http://3.65.232.220:8080` in Frankfurt
-(eu-central-1, availability zone ID `euc1-az2`) and `http://100.57.61.188:8080` in northern Virginia (us-east-1,
-`use1-az5`). They are a demo and may be taken down.
+A public instance serves the whole planet at `http://3.65.232.220:8080`: one c5a.4xlarge in Frankfurt
+(eu-central-1, availability zone ID `euc1-az2`). It is a demo and may be taken down.
 
-Open either address in a browser for the demo page described above, or use a terminal:
+Open the address in a browser for the demo page described above, or use a terminal:
 
 ```bash
-curl -s http://100.57.61.188:8080/health
+curl -s http://3.65.232.220:8080/health
 ```
 
 ```bash
-curl -s http://100.57.61.188:8080/matrix -H 'content-type: application/json' -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}'
+curl -s http://3.65.232.220:8080/matrix -H 'content-type: application/json' -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}'
 ```
 
 Time to last byte for 1,000 random points around a city, measured by a client that only needs Python's standard library:
@@ -153,7 +152,7 @@ python3 bench/try_api.py --points 1000 --center 53.55,10.0
 the sea, more than 5 km from any road), and `--world --on-roads` keeps only points within 5 km of a road.
 
 From outside AWS the result includes the internet round trip and the time your line needs for 8 MB. The 100 ms target
-is for a client in the same region: run the script on any EC2 instance in us-east-1, ideally in `use1-az5`.
+is for a client in the same region: run the script on any EC2 instance in eu-central-1, ideally in `euc1-az2`.
 
 ## Running it
 

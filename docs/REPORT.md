@@ -21,7 +21,7 @@ c5a.4xlarge with the whole OpenStreetMap planet (235 M junctions, 1.9 M turn res
   17–45 km and agreed within 0.4–3 %; the gap sat in the last few hundred metres, where the example's coordinates (points
   in fields, 250–600 m from a road) attach to different roads. That led to release `car-v2`: the way from a point to
   its road is now charged instead of free, and routes no longer cut through car parks.
-* **Public demo:** `http://100.57.61.188:8080` (see the README for a one-command latency test).
+* **Public demo:** `http://3.65.232.220:8080` in Frankfurt, a browser page with an end-to-end timing breakdown (see the README).
 
 ## 1. Who the customer is and what they actually need
 
@@ -462,7 +462,7 @@ geocoder broke), dataset older than 14 days.
 
 **Security.** The service has no authentication by design of the spec; in production it belongs in a private subnet
 reachable only from the optimiser's security group. The demo instance is deliberately public (port 8080 open to the
-internet, fixed address 100.57.61.188) so that it can be tested; the request limits and admission control above keep it
+internet, fixed address 3.65.232.220 in Frankfurt) so that it can be tested; the request limits and admission control above keep it
 stable under abuse, but there is no per-client quota, so one heavy client can make others queue. For TLS or cross-VPC access put an internal ALB/NLB in front (TLS adds ~2–4 ms on
 8 MB).
 

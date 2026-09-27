@@ -499,7 +499,7 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
       <h2><span class="num">8</span>Calling it</h2>
       <p>The request is exactly the specified one; <code>sources</code> and <code>destinations</code> are optional index lists. Ask for the binary body with its media type:</p>
     </section>
-    <pre>curl -s -X POST http://100.57.61.188:8080/matrix \
+    <pre>curl -s -X POST http://3.65.232.220:8080/matrix \
   -H 'content-type: application/json' \
   -H 'accept: application/vnd.distance-matrix.v1' \
   -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}' -o m.bin
@@ -509,7 +509,7 @@ m = np.frombuffer(open("m.bin", "rb").read(), "&lt;u4", offset=16).reshape(rows,
 distances, times = m[:, 0], m[:, 1]          # zero-copy views</pre>
     <div class="col">
       <p>Without the <code>accept</code> header the answer is the specified JSON &mdash; for the example above <code>{"distances":[[0,18070,48928],[18062,0,36030],[48894,36030,0]],"times":[[0,1213,3080],[1200,0,2665],[3070,2665,0]]}</code>.</p>
-      <p><strong>Try it.</strong> A public instance serves the whole planet at <code>http://100.57.61.188:8080</code> (one c5a.4xlarge in AWS us-east-1, availability zone ID <code>use1-az5</code>). <code>python3 bench/try_api.py --points 1000 --center 53.55,10.0</code> sends 1,000 random points around a city and prints time to last byte; it needs only Python's standard library. Outside AWS the numbers include your internet round trip and the time your line needs for 8 MB; the 100 ms target is for a client in the same region.</p>
+      <p><strong>Try it.</strong> A public instance serves the whole planet at <code>http://3.65.232.220:8080</code> (one c5a.4xlarge in AWS Frankfurt, availability zone ID <code>euc1-az2</code>); opening it in a browser shows a demo page with an end-to-end timing breakdown and a map. <code>python3 bench/try_api.py --points 1000 --center 53.55,10.0</code> sends 1,000 random points around a city and prints time to last byte; it needs only Python's standard library. Outside AWS the numbers include your internet round trip and the time your line needs for 8 MB; the 100 ms target is for a client in the same region.</p>
     </div>
 
     <section class="col" id="next">
