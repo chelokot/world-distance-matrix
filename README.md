@@ -35,8 +35,8 @@ The response format is chosen with the `Accept` header.
 **JSON** (`Accept: application/json`, or no `Accept` header):
 
 ```json
-{ "distances": [[0, 17509, 48050], [17501, 0, 35181], [47995, 35181, 0]],
-  "times":     [[0, 1079, 2864],   [1066, 0, 2461],   [2854, 2461, 0]] }
+{ "distances": [[0, 18070, 48928], [18062, 0, 36030], [48894, 36030, 0]],
+  "times":     [[0, 1213, 3080],   [1200, 0, 2665],   [3070, 2665, 0]] }
 ```
 
 **Binary** (`Accept: application/vnd.distance-matrix.v1`) — the fast path, recommended for anything above a few
@@ -60,9 +60,11 @@ computed, with an exact `Content-Length`; a truncated body means the request fai
 * `[i][j]` is the route from `i` to `j`; matrices are asymmetric (one-way streets, one-way ferries/car trains).
 * The route is the **fastest** route for a car or van; the reported distance is the length of that route. Ties in
   time are broken by shorter distance, so results are deterministic.
-* Each coordinate is snapped to the nearest routable road (within 5 km). Unroutable pairs — a point with no road within
-  5 km, a car-free island, a different continent — are `null` in JSON and `0xFFFFFFFF` in binary. A point to itself (or
-  to an identical coordinate) is always `0`.
+* Each coordinate is attached to the nearest road a car may drive through (within 5 km). The straight line between the
+  coordinate and that road belongs to every route that starts or ends there: its length is part of the distance and it
+  is driven at 15 km/h (a driveway, a yard, parking). Unroutable pairs — a point with no road within 5 km, a car-free
+  island, a different continent — are `null` in JSON and `0xFFFFFFFF` in binary. A point to itself (or to an identical
+  coordinate) is always `0`.
 * Values are free-flow estimates from OpenStreetMap speed limits and road classes; they contain no live or historical
   traffic.
 
@@ -80,6 +82,28 @@ locations/cells (limits below), `503` at capacity (with `Retry-After`; retry wit
 Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests_total`, `dm_compute_seconds`,
 `dm_admission_wait_seconds`, `dm_cells_in_flight`, `dm_unsnapped_points_total`, `dm_dataset_info`, …).
 
+## Try it
+
+A public instance serves the whole planet at `http://100.57.61.188:8080` (one c5a.4xlarge in AWS us-east-1, availability
+zone ID `use1-az5`).
+
+```bash
+curl -s http://100.57.61.188:8080/health
+```
+
+```bash
+curl -s http://100.57.61.188:8080/matrix -H 'content-type: application/json' -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}'
+```
+
+Time to last byte for 1,000 random points around a city, measured by a client that only needs Python's standard library:
+
+```bash
+python3 bench/try_api.py --points 1000 --center 53.55,10.0
+```
+
+From outside AWS the result includes the internet round trip and the time your line needs for 8 MB. The 100 ms target
+is for a client in the same region: run the script on any EC2 instance in us-east-1, ideally in `use1-az5`.
+
 ## Running it
 
 ```bash
@@ -93,7 +117,8 @@ Configuration is by flag or environment variable (`dm-server --help`): `DM_DATA`
 `DM_SNAP_MAX_DISTANCE_M`, `DM_LOCK_MEMORY`, `DM_LOG_JSON`.
 
 Production deployment (systemd unit, kernel tuning, versioned datasets with an atomic `current` symlink) is in
-[infra/deploy](infra/deploy); `infra/deploy/install.sh <binary> <dataset-dir>` installs or upgrades a host.
+[infra/deploy](infra/deploy); on a host, `infra/deploy/upgrade.sh <dataset>` installs the current release binary and
+that dataset from S3 and restarts the service, keeping one previous dataset for rollback.
 
 ## Repository layout
 

@@ -1,0 +1,19 @@
+[
+  {
+    "bytes": 10541986,
+    "concurrency": 1,
+    "decode_p50_ms": 27.768171000000002,
+    "format": "json",
+    "label": "hamburg",
+    "requests": 100,
+    "shape": "square",
+    "size": 1000,
+    "throughput_rps": 14.198210090178954,
+    "total_p50_ms": 70.137529,
+    "total_p99_ms": 75.726913,
+    "ttlb_max_ms": 48.282262,
+    "ttlb_p50_ms": 42.261962,
+    "ttlb_p90_ms": 43.150583,
+    "ttlb_p99_ms": 47.318534
+  }
+]

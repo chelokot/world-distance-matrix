@@ -4,7 +4,7 @@
 
 A single-endpoint service that returns road distances and travel times between every pair of up to 10,000 locations
 anywhere in the world, built for the scheduling optimiser of Solvares Field Service (VISITOUR). Running on one
-c5a.4xlarge with the whole OpenStreetMap planet (236 M junctions, 1.9 M turn restrictions) resident in RAM:
+c5a.4xlarge with the whole OpenStreetMap planet (235 M junctions, 1.9 M turn restrictions) resident in RAM:
 
 * **1,000 × 1,000 in 31–36 ms median, < 40 ms p99, time to last byte** at a client in the same AWS availability zone,
   for realistic points from Hamburg to Europe-wide to New York, Tokyo or Sydney (OSRM's table service needs 1.1 s for
@@ -17,6 +17,11 @@ c5a.4xlarge with the whole OpenStreetMap planet (236 M junctions, 1.9 M turn res
   the binary format (JSON parsing alone costs 188 ms in Python); turn *delays* are not modelled (≈ 1.4 % optimistic in
   cities vs OSRM's turn model), which a VRP experiment shows leaves plan efficiency unchanged and costs ≈ 8 s of
   schedule slack per technician-day; free-flow speeds (the customer applies its own traffic profiles).
+* **Checked against the task's own example** (§5): where our times differed from OSRM's, the routes were identical for
+  17–45 km and agreed within 0.4–3 %; the gap sat in the last few hundred metres, where the example's coordinates (points
+  in fields, 250–600 m from a road) attach to different roads. That led to release `car-v2`: the way from a point to
+  its road is now charged instead of free, and routes no longer cut through car parks.
+* **Public demo:** `http://100.57.61.188:8080` (see the README for a one-command latency test).
 
 ## 1. Who the customer is and what they actually need
 
@@ -101,7 +106,7 @@ percent in individual cells are harmless; systematic optimism and >10 % errors a
 | R2 | **Binary response format** is the fast path; JSON is served as specified but is not the 100 ms path for 1,000² | clients need a 1-line decoder (`np.frombuffer(...)`) | parsing 10.7 MB of JSON takes 188 ms in Python and 33 ms in Rust; the binary body is a zero-copy view (2 µs) | §2 |
 | R3 | **Turn restrictions and one-ways are modelled exactly; turn *delays* (seconds spent turning) are not** | durations ~1.4 % lower than OSRM's turn-delay model in a city (median), ~5 % lower for the most turn-heavy tenth of pairs; in the VRP test ~4 min of lateness per 30-technician plan under that model, i.e. ~8 s per technician-day | plan efficiency is unchanged (within solver noise); VISITOUR applies its own time-of-day speed model on top, whose corrections are an order of magnitude larger; a turn-delay model needs an edge-based graph, 2–3× the memory — the whole world would no longer fit in 32 GB — and larger search spaces | §5 table 4 (with / without OSRM turn penalties), VRP table |
 | R4 | **Free-flow speeds** from OSM (OSRM's car defaults; 80 % of posted limits; unpaved ≤ 30 km/h; 2 s per traffic signal) | no congestion, no time of day | OSM has no traffic; the customer already owns a predictive traffic layer | — |
-| R5 | **Snapping**: nearest road in a connected network within 5 km, on geometry simplified to 5 m; driveways, parking aisles and private roads excluded; the building-to-kerb offset is not added | the last tens of metres to a front door | that time is part of the job's service duration; excluding private/driveway fragments avoids snapping addresses into dead-end networks (the main source of OSRM's own outliers, §5) | §5 tail analysis |
+| R5 | **Snapping**: nearest road in a connected network within 5 km, on geometry simplified to 5 m; driveways, parking aisles, private roads and service roads open only to destination/delivery/customer traffic are not part of the graph; the straight line from the point to its road is charged at 15 km/h, its length added to the distance | the true shape and speed of the last metres (an unmapped driveway, a farm track, a car park) | for an address the leg is a few seconds; for a farm or a site at the end of a private track it is the minute or two a technician really needs, instead of zero; keeping private fragments out of the graph stops addresses snapping into dead-end networks and routes cutting through car parks (the main source of disagreement with OSRM, §5) | §5 tail analysis, §5 the task's example |
 | R6 | **Ferries and car trains** only when tagged for cars; time from `duration`, else `maxspeed`, else 20 km/h; no timetable waiting | ±15 min on island trips that depend on sailing schedules | islands are a small share of field-service work; the schedule is not in OSM anyway | Sylt/Amrum analysis, §5 |
 | R7 | **Size envelope**: ≤ 25,000 locations and ≤ 100 M cells per binary request (10k × 10k), ≤ 16 M cells per JSON request; larger matrices are tiled by the client with `sources`/`destinations` | a single call cannot return a 20k × 20k matrix (3.2 GB) | above ~2,000 points the response is bandwidth-bound; tiling lets a client parallelise or cache | §6 |
 | R8 | **Weekly data refresh** from the planet file, ~1 h on one spot instance | road changes appear with up to a week's delay | the road network changes slowly relative to planning horizons of hours to days | build logs |
@@ -190,17 +195,17 @@ dead process. Client disconnects stop the computation. Graceful shutdown drains 
 
 Three independent layers, each run on real data.
 
-**1. Unit and property tests** (`cargo test --workspace`, 43 tests including the end-to-end ones below). The contraction hierarchy is compared against
+**1. Unit and property tests** (`cargo test --workspace`, 44 tests including the end-to-end ones below). The contraction hierarchy is compared against
 Dijkstra for *all pairs* of random directed graphs with one-way and asymmetric arcs, with both tight and generous witness
 limits; the packed R-tree against brute force; the AVX2 kernel against scalar code; the open-addressing map against
 `HashMap`; tag handling of the vehicle profile (access, oneway, maxspeed formats, ferries, car trains, barriers, turn
 restrictions); junction splitting (a forbidden turn disappears only for the restricted approach, an `only_` turn keeps
 only its exit, malformed restrictions are skipped); the wire format both ways.
 
-**2. End-to-end tests** (13, `crates/dm-server/src/tests.rs`). A dataset is built from a real OSM extract of central
+**2. End-to-end tests** (14, `crates/dm-server/src/tests.rs`). A dataset is built from a real OSM extract of central
 Kiel and served over HTTP, in-process and over TCP: JSON has exactly the specified shape, binary and JSON agree cell by
 cell, one-way streets make the matrix asymmetric, rectangular requests equal the corresponding square cells, duplicate
-points are free, points 50 km out to sea are `null`, every malformed request gets the right 4xx with an explanation,
+points are free, a point off the road pays its way to the road and back, points 50 km out to sea are `null`, every malformed request gets the right 4xx with an explanation,
 overload returns `503` + `Retry-After`, metrics are exported, a 400 × 400 matrix streams with an exact `Content-Length`.
 
 **3. Dataset verification against an independent reference** (`dm-bench verify`). For random realistic points the
@@ -219,6 +224,8 @@ bit-identical results on repetition, and consistency under permutation of the in
 | **planet** | 401 in Hamburg | 9,624 | 9,624 | 0 | 0 | 0 |
 | **planet** | 301 across Great Britain | 3,612 | 3,612 | 0 | 0 | 0 |
 | **planet** | 201 across Europe | 804 | 804 | 0 | 0 | 0 |
+| **planet, car-v2** | 401 in London | 9,648 | 9,648 | 0 | 0 | 0 |
+| **planet, car-v2** | 401 in Hamburg | 9,648 | 9,648 | 0 | 0 | 0 |
 
 **4. Model validation against OSRM** (`dm-bench compare-osrm`, OSRM v5 car profile as an independent engine on the
 same OSM extract, 900 random building locations, ~268 k pairs per row; pairs under 60 s or 500 m excluded).
@@ -234,6 +241,49 @@ bias disappears, so the ~1.4 % gap in cities is OSRM's turn-delay model (7.5 s s
 tail, the two engines disagree about *which road an address attaches to*: for the two most frequent outliers OSRM
 itself prices our route cheaper than the one it returned (1,783 s vs 2,170 s; 2,286 s vs 2,536 s), because it snapped
 the building to a cul-de-sac or park road reachable only by a detour.
+
+**5. The task's own example.** The task statement shows an illustrative response for three points near Neumünster
+(54.0/10.0, 54.1/10.1, 54.2/10.4). Four engines on the same request (distance km / time min; OSRM and Valhalla are their
+public demo servers with their own data snapshots):
+
+| cell | task, "illustrative" | ours, car-v1 | **ours, car-v2** | OSRM | Valhalla |
+|---|---|---|---|---|---|
+| 0→1 | 18.2 / 22.0 | 17.5 / 18.0 | **18.1 / 20.2** | 18.7 / 21.2 | 18.6 / 32.2 |
+| 0→2 | 55.9 / 52.0 | 48.0 / 47.7 | **48.9 / 51.3** | 47.8 / 54.5 | 53.0 / 69.8 |
+| 1→0 | 18.2 / 22.4 | 17.5 / 17.8 | **18.1 / 20.0** | 18.7 / 21.0 | 18.7 / 33.8 |
+| 1→2 | 32.4 / 38.0 | 35.2 / 41.0 | **36.0 / 44.4** | 31.9 / 46.3 | 34.2 / 52.3 |
+| 2→0 | 61.4 / 56.9 | 48.0 / 47.6 | **48.9 / 51.2** | 47.8 / 54.5 | 64.4 / 72.1 |
+| 2→1 | 38.2 / 44.5 | 35.2 / 41.0 | **36.0 / 44.4** | 31.9 / 46.4 | 34.2 / 52.1 |
+
+The mature engines disagree with each other by up to 50 % on these cells, so the example is no reference. The useful
+question was why car-v1 was 12–16 % faster than OSRM here when it is ~1.5 % faster on addresses (table 4). I traced the
+routes: a road point Q lies on our A→B route exactly when t(A,Q) + t(Q,B) = t(A,B), so probing every OSM road node in
+the area reconstructs our route; pricing it in OSRM through waypoints, and comparing cumulative times along OSRM's own
+route, locates every second of difference.
+
+* **0→2:** the routes are identical for 44.5 km and agree within 10 s. All 409 s of difference are OSRM's last 582 m: to
+  reach point 2, which lies in a field, it drives a grade-2 farm track at 5 km/h. We do not route tracks and attached the
+  point to the public road instead — for free.
+* **0→1:** identical for 17 km; OSRM adds 33 s of turn penalties there (relaxation R3, 3 %). The other 162 s come from
+  attaching point 1 (250 m from any road) to a different road.
+* **0↔2** also cut through a service road tagged `access=customers` (a car park), which OSRM allows only at the start
+  or end of a route.
+
+A wider sample confirms the mechanism (80 random points per sample fed to both engines at OSRM's own snapped positions;
+pairs ≥ 5 km):
+
+| sample | car-v1: median ours/OSRM · pairs > 10 % faster | car-v2 |
+|---|---|---|
+| rural Schleswig-Holstein, random points (mostly in fields) | 0.965 · 23.0 % | 0.975 · 12.2 % |
+| rural Schleswig-Holstein, points on named public roads (like addresses) | 0.987 · 5.0 % | 0.987 · 3.7 % |
+| Hamburg | 0.975 · 4.8 % | 0.980 · 3.6 % |
+
+For address-like points the countryside behaves like the city; the tail belonged to points far from any road, where
+car-v1 charged nothing for the way to the road. Release **car-v2** therefore (a) charges the straight line from a point
+to its road at 15 km/h and adds its length to the distance (a few seconds for an address, 1–2 min for a farm at the end
+of a track), and (b) removes service roads open only to destination, delivery or customer traffic from the graph. On
+the example car-v2 lands within 4–6 % of OSRM in every cell. Residential streets tagged "destination only" stay
+routable (addresses are on them); that through traffic may use them is a remaining relaxation of the node-based model.
 
 **Bugs found by this process, all fixed:** ferries tagged only `hgv=yes` were excluded (Kiel Canal ferry Hohenhörn);
 car trains ignored `maxspeed` and `oneway` (Sylt Shuttle at 20 km/h → 89 min too slow to Sylt); a stale dataset
@@ -349,13 +399,31 @@ sustains ~36 matrices of 1,000² per second (36 M routes/s) or ~300 of 100²; be
 **Baseline.** OSRM's CH table service on the same hardware takes 1,126 ms for a 1,000 × 1,000 table on a *Hamburg
 city extract* (365 k nodes); this service takes 25–30 ms of compute for the same size on the *world* graph.
 
+**Re-measured on the car-v2 release** (same host, client in the same availability zone, RTT 0.21 ms; building
+locations from current Geofabrik extracts, road junctions for Europe; results in `results/car-v2/`):
+
+| request | car-v1 p50 / p99 | car-v2 p50 / p99 |
+|---|---|---|
+| 1,000² Hamburg | 30.6 / 36.4 ms | 27.6 / 32.2 ms |
+| 1,000² London | 33.7 / 36.9 ms | 30.4 / 35.0 ms |
+| 1,000² Schleswig-Holstein | 33.3 / 37.3 ms | 30.2 / 34.3 ms |
+| 1,000² Europe-wide (car-v2: road junctions) | 35.4 / 39.8 ms | 32.2 / 37.0 ms |
+| 10² / 100² / 500² Hamburg | 1.5 / 1.6 · 3.6 / 4.1 · 13.6 / 15.2 ms | 1.7 / 1.9 · 3.4 / 3.8 · 12.8 / 14.0 ms |
+| 2,000² / 5,000² Hamburg | 79.1 / 97.4 · 486 / 502 ms | 75.8 / 90.6 · 471 / 475 ms |
+| 1 × 1,000 / 1,000 × 1 Hamburg | 10.6 / 11.5 · 8.5 / 8.8 ms | 10.1 / 11.2 · 7.6 / 8.0 ms |
+| 1,000² JSON Hamburg | 44.7 / 52.8 ms | 42.3 / 47.3 ms |
+| 1,000² via `bench/try_api.py` (Python, standard library, incl. decoding) | — | 32.0 / 33.5 ms; 32.5 / 33.9 ms through the public address |
+
+Charging the access leg costs nothing measurable; the small gains come from the slightly smaller graph (235.5 M nodes,
+587 M arcs).
+
 
 ## 7. Operations
 
 **Deployment shape.** One stateless process per host (`dm-server`, systemd, hardened unit), one immutable dataset
 directory per OSM snapshot under `/opt/dm/data/<version>`, an atomic `current` symlink, and the binary and datasets in a
-private S3 bucket. A new host is `infra/bootstrap-server.sh` as EC2 user data: it pulls the binary and the dataset and
-runs `infra/deploy/install.sh`, which installs the unit, applies kernel settings (no TCP slow-start after idle, large
+private S3 bucket. A new host is `infra/bootstrap-server.sh` as EC2 user data: it runs `infra/deploy/upgrade.sh`, which pulls
+the release binary and the dataset and runs `infra/deploy/install.sh`, which installs the unit, applies kernel settings (no TCP slow-start after idle, large
 socket buffers) and waits for `/health`. Horizontal scaling and zero-downtime updates are "more of the same host behind
 a load balancer"; there is no shared state.
 
@@ -365,9 +433,10 @@ a load balancer"; there is no shared state.
 
 **Data refresh.** `infra/build-dataset.sh` launches a one-off spot instance (r6a.4xlarge, 128 GB) with
 `infra/bootstrap-builder.sh`: it takes the newest planet from the AWS open-data bucket, runs `dm-build` (51 min for the planet on 16 cores: 6 min ways and restrictions, 6 min nodes, 8 min topology, 3 min components, 30 min contraction, 2 min writing; the last run peaked at 112 GB, which is why geometry is now simplified before contraction and every phase logs its peak memory),
-uploads `datasets/planet-YYMMDD` and its build log to S3 and terminates itself — about $0.50 per build. On a serving
-host, `infra/deploy-dataset.sh planet-YYMMDD` downloads it, switches the symlink, restarts, and keeps one previous
-dataset for rollback. Weekly is the recommended cadence; a restart makes a single host unavailable for the load time, so
+uploads `datasets/planet-YYMMDD` and its build log to S3 and terminates itself — about $0.50 per build. The car-v2
+build of the same planet took 48 min and peaked at 93 GB. On a serving
+host, `infra/deploy/upgrade.sh planet-YYMMDD` downloads the release binary and the dataset, switches the symlink,
+restarts, and keeps one previous dataset for rollback; the previous release stays in S3 under `releases/car-v1/`. Weekly is the recommended cadence; a restart makes a single host unavailable for the load time, so
 production should run two hosts behind a load balancer and update them one at a time.
 
 **Overload and failure behaviour.**
@@ -390,8 +459,10 @@ histograms by size class, cells in flight, queued requests, unsnapped points, lo
 `dm_compute_seconds` for the 1,000² class above 50 ms, any `503`, `dm_unsnapped_points_total` rate jumps (a customer's
 geocoder broke), dataset older than 14 days.
 
-**Security.** The service has no authentication by design of the spec; it belongs in a private subnet reachable only
-from the optimiser's security group. For TLS or cross-VPC access put an internal ALB/NLB in front (TLS adds ~2–4 ms on
+**Security.** The service has no authentication by design of the spec; in production it belongs in a private subnet
+reachable only from the optimiser's security group. The demo instance is deliberately public (port 8080 open to the
+internet, fixed address 100.57.61.188) so that it can be tested; the request limits and admission control above keep it
+stable under abuse, but there is no per-client quota, so one heavy client can make others queue. For TLS or cross-VPC access put an internal ALB/NLB in front (TLS adds ~2–4 ms on
 8 MB).
 
 

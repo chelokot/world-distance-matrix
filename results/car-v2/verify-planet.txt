@@ -1,0 +1,31 @@
+== verify london
+Report {
+    pairs: 9648,
+    exact: 9648,
+    within_tolerance: 9648,
+    reachability_mismatch: 0,
+    duration_mismatch: 0,
+    distance_only_mismatch: 0,
+    max_duration_error_s: 0,
+    max_distance_error_m: 0,
+    diagonal_violations: 0,
+    triangle_violations: 0,
+    nondeterministic_cells: 0,
+    permutation_mismatches: 0,
+}
+== verify hamburg
+Report {
+    pairs: 9648,
+    exact: 9648,
+    within_tolerance: 9648,
+    reachability_mismatch: 0,
+    duration_mismatch: 0,
+    distance_only_mismatch: 0,
+    max_duration_error_s: 0,
+    max_distance_error_m: 0,
+    diagonal_violations: 0,
+    triangle_violations: 0,
+    nondeterministic_cells: 0,
+    permutation_mismatches: 0,
+}
+PREPARE_DONE

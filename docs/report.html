@@ -187,7 +187,7 @@ footer p { max-width: 720px; }
 
     <div class="figures" role="list">
       <div class="figure" role="listitem"><span class="value">&lt;40<small>ms</small></span><span class="label">p99 time to last byte, 1,000 × 1,000, every tested region</span></div>
-      <div class="figure" role="listitem"><span class="value">236<small>M</small></span><span class="label">road junctions, whole planet, 1.9 M turn restrictions</span></div>
+      <div class="figure" role="listitem"><span class="value">235<small>M</small></span><span class="label">road junctions, whole planet, 1.9 M turn restrictions</span></div>
       <div class="figure" role="listitem"><span class="value">100<small>%</small></span><span class="label">agreement with an independent Dijkstra (to 1 m rounding)</span></div>
       <div class="figure" role="listitem"><span class="value">36<small>/s</small></span><span class="label">1,000² matrices per host, no long tail under load</span></div>
     </div>
@@ -269,7 +269,7 @@ footer p { max-width: 720px; }
           <tr><td><strong>Binary</strong> is the fast path; JSON is served exactly as specified</td><td>Clients need a one-line decoder</td><td>JSON parsing costs 188 ms in Python, 33 ms in Rust; binary is a zero-copy view</td><td>§2</td></tr>
           <tr><td><strong>Turn restrictions and one-ways exact; turn delays not modelled</strong></td><td>~1.4 % optimistic vs OSRM's turn model in a city (median); ~5 % for the most turn-heavy tenth</td><td>Plan efficiency unchanged; the customer's traffic profiles correct far more; turn delays need an edge-based graph at 2&ndash;3× the memory</td><td>§5, VRP test</td></tr>
           <tr><td><strong>Free-flow speeds</strong> from OSM (OSRM car defaults, 80 % of posted limits, 2 s per signal)</td><td>No congestion or time of day</td><td>OSM has no traffic; the customer owns a predictive traffic layer</td><td>&mdash;</td></tr>
-          <tr><td><strong>Snapping</strong> to the nearest road in a connected network within 5 km; driveways and parking aisles excluded; building-to-kerb offset not added</td><td>The last tens of metres to a front door</td><td>That time belongs to the job's service duration; it avoids attaching addresses to dead-end fragments</td><td>§5</td></tr>
+          <tr><td><strong>Snapping</strong> to the nearest road in a connected network within 5 km; driveways, parking aisles, private roads and destination-only service roads are not in the graph; the straight line from the point to its road is charged at 15 km/h and added to the distance</td><td>The true shape and speed of the last metres: an unmapped driveway, a farm track, a car park</td><td>A few seconds for an address, the minute or two a technician really needs for a farm at the end of a private track; routes cannot cut through car parks, and addresses do not attach to dead-end fragments</td><td>§5</td></tr>
           <tr><td><strong>Ferries and car trains</strong> only when tagged for cars; no timetable waiting</td><td>±15 min on island trips</td><td>Schedules are not in OSM; islands are a small share of the work</td><td>§5</td></tr>
           <tr><td><strong>Size envelope</strong>: ≤ 25,000 locations, ≤ 100 M cells binary, ≤ 16 M cells JSON; tile larger with <code>sources</code>/<code>destinations</code></td><td>No single 20k × 20k call (3.2 GB)</td><td>Above ~2,000 points the response is bandwidth-bound anyway</td><td>§6</td></tr>
           <tr><td><strong>Weekly refresh</strong> from the planet file</td><td>Road changes appear up to a week late</td><td>Roads change slowly relative to planning horizons</td><td>§7</td></tr>
@@ -321,7 +321,7 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
 
     <section class="col" id="correctness">
       <h2><span class="num">5</span>Correctness evidence</h2>
-      <p><strong>43 unit, property and end-to-end tests</strong>: the hierarchy against Dijkstra for all pairs of random directed graphs; the R-tree against brute force; the AVX2 kernel against scalar code; the vehicle profile's tag handling; junction splitting; the wire format; and an HTTP suite that builds a dataset from a real Kiel extract and checks shape, binary/JSON agreement, asymmetry, rectangular requests, <code>null</code> for points at sea, every 4xx, overload, metrics and streaming over TCP.</p>
+      <p><strong>44 unit, property and end-to-end tests</strong>: the hierarchy against Dijkstra for all pairs of random directed graphs; the R-tree against brute force; the AVX2 kernel against scalar code; the vehicle profile's tag handling; junction splitting; the wire format; and an HTTP suite that builds a dataset from a real Kiel extract and checks shape, binary/JSON agreement, asymmetry, rectangular requests, the off-road leg of a point beside the road, <code>null</code> for points at sea, every 4xx, overload, metrics and streaming over TCP.</p>
       <h3>Every checked pair matches an independent Dijkstra</h3>
       <p><code>dm-bench verify</code> compares the engine with plain Dijkstra over the <em>uncontracted</em> graph, with every query point inserted as a virtual node splitting its road and turn-restriction copies included. It also checks the zero diagonal, the triangle inequality on all triples of 150 points, bit-identical repetition and permutation consistency.</p>
     </section>
@@ -337,6 +337,8 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
           <tr class="em"><td>Planet</td><td>401 in Hamburg</td><td class="n">9,624</td><td class="n">9,624</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
           <tr class="em"><td>Planet</td><td>301 across Great Britain</td><td class="n">3,612</td><td class="n">3,612</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
           <tr class="em"><td>Planet</td><td>201 across Europe</td><td class="n">804</td><td class="n">804</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet, car-v2</td><td>401 in London</td><td class="n">9,648</td><td class="n">9,648</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr class="em"><td>Planet, car-v2</td><td>401 in Hamburg</td><td class="n">9,648</td><td class="n">9,648</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
         </tbody>
       </table>
     </div>
@@ -357,6 +359,45 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
     <div class="col">
       <p>With OSRM's turn penalties switched off the median bias disappears: the ~1.4 % city gap is OSRM's turn-delay model. In the tail the engines disagree about which road an address attaches to &mdash; for the two most frequent outliers OSRM itself prices our route cheaper than the one it returned (1,783 s vs 2,170 s; 2,286 s vs 2,536 s), because it snapped the building to a cul-de-sac or park road reachable only by a detour.</p>
       <p><strong>Bugs this process found, all fixed:</strong> ferries tagged only <code>hgv=yes</code> were excluded (a Kiel Canal ferry); car trains ignored <code>maxspeed</code> and <code>oneway</code> (the Sylt Shuttle ran at 20 km/h, making Sylt 89 min too far); a stale dataset was correctly refused at load. One disagreement is OSRM's: it routes cars to Helgoland, a car-free island, over a passenger ferry; this service returns <code>null</code>.</p>
+    </div>
+    <div class="col">
+      <h3>The task's own example, traced to the metre</h3>
+      <p>The task statement shows an illustrative answer for three points near Neumünster. Four engines on the same request, distance in km / time in minutes (OSRM and Valhalla are their public demo servers, with their own data):</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Cell</th><th class="n">Task, "illustrative"</th><th class="n">Ours, car-v1</th><th class="n">Ours, car-v2</th><th class="n">OSRM</th><th class="n">Valhalla</th></tr></thead>
+        <tbody>
+          <tr><td>0→1</td><td class="n">18.2 / 22.0</td><td class="n">17.5 / 18.0</td><td class="n"><strong>18.1 / 20.2</strong></td><td class="n">18.7 / 21.2</td><td class="n">18.6 / 32.2</td></tr>
+          <tr><td>0→2</td><td class="n">55.9 / 52.0</td><td class="n">48.0 / 47.7</td><td class="n"><strong>48.9 / 51.3</strong></td><td class="n">47.8 / 54.5</td><td class="n">53.0 / 69.8</td></tr>
+          <tr><td>1→0</td><td class="n">18.2 / 22.4</td><td class="n">17.5 / 17.8</td><td class="n"><strong>18.1 / 20.0</strong></td><td class="n">18.7 / 21.0</td><td class="n">18.7 / 33.8</td></tr>
+          <tr><td>1→2</td><td class="n">32.4 / 38.0</td><td class="n">35.2 / 41.0</td><td class="n"><strong>36.0 / 44.4</strong></td><td class="n">31.9 / 46.3</td><td class="n">34.2 / 52.3</td></tr>
+          <tr><td>2→0</td><td class="n">61.4 / 56.9</td><td class="n">48.0 / 47.6</td><td class="n"><strong>48.9 / 51.2</strong></td><td class="n">47.8 / 54.5</td><td class="n">64.4 / 72.1</td></tr>
+          <tr><td>2→1</td><td class="n">38.2 / 44.5</td><td class="n">35.2 / 41.0</td><td class="n"><strong>36.0 / 44.4</strong></td><td class="n">31.9 / 46.4</td><td class="n">34.2 / 52.1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>Mature engines disagree by up to 50 % here, so the example is no reference. The useful question was why car-v1 was 12&ndash;16 % faster than OSRM on it while it is ~1.5 % faster on addresses. A road point Q lies on our A→B route exactly when t(A,Q) + t(Q,B) = t(A,B), so probing every OSM road node in the area reconstructs our route; pricing it in OSRM through waypoints locates every second of difference.</p>
+      <ul class="plain">
+        <li><strong>0→2:</strong> identical routes for 44.5 km, agreeing within 10 s. All 409 s of difference are OSRM's last 582 m: point 2 lies in a field, and OSRM reaches it along a farm track at 5 km/h, while car-v1 attached it to the public road for free.</li>
+        <li><strong>0→1:</strong> identical for 17 km, where OSRM adds 33 s of turn penalties (3 %, relaxation R3). The other 162 s come from attaching point 1, 250 m from any road, to a different road.</li>
+        <li><strong>0↔2</strong> also cut through a car park tagged <code>access=customers</code>.</li>
+      </ul>
+      <p>A wider sample (80 random points per sample, fed to both engines at OSRM's snapped positions, pairs ≥ 5 km) confirms it: the tail belonged to points far from any road.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Sample</th><th class="n">car-v1: median ours ÷ OSRM · pairs &gt; 10 % faster</th><th class="n">car-v2</th></tr></thead>
+        <tbody>
+          <tr><td>Rural Schleswig-Holstein, random points (mostly in fields)</td><td class="n">0.965 · 23.0 %</td><td class="n">0.975 · 12.2 %</td></tr>
+          <tr><td>Rural Schleswig-Holstein, points on named public roads</td><td class="n">0.987 · 5.0 %</td><td class="n">0.987 · 3.7 %</td></tr>
+          <tr><td>Hamburg</td><td class="n">0.975 · 4.8 %</td><td class="n">0.980 · 3.6 %</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>Release <strong>car-v2</strong> therefore charges the straight line from a point to its road at 15 km/h and adds its length to the distance (seconds for an address, a minute or two for a farm at the end of a track), and takes service roads open only to destination, delivery or customer traffic out of the graph. On the example it now lands within 4&ndash;6 % of OSRM in every cell. Residential streets signed "destination only" stay routable, because addresses are on them; that through traffic can use them remains a relaxation of the node-based model.</p>
     </div>
 
     <section class="col" id="performance">
@@ -407,13 +448,31 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
     <div class="col">
       <p>With 10,000² batch jobs running back to back, interactive 1,000² requests measured p50 46 ms and p99 75 ms, and 100² requests p99 8 ms. One host sustains about 36 matrices of 1,000² per second (36 M routes/s) or 300 of 100²; beyond that, add hosts.</p>
     </div>
+    <div class="col">
+      <h3>Re-measured on the car-v2 release</h3>
+      <p>Same host, client in the same availability zone (RTT 0.21 ms); building locations from current extracts, road junctions for Europe. Charging the access leg costs nothing measurable.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Request</th><th class="n">car-v1 p50 / p99</th><th class="n">car-v2 p50 / p99</th></tr></thead>
+        <tbody>
+          <tr><td>1,000² Hamburg</td><td class="n">30.6 / 36.4 ms</td><td class="n">27.6 / 32.2 ms</td></tr>
+          <tr><td>1,000² London</td><td class="n">33.7 / 36.9 ms</td><td class="n">30.4 / 35.0 ms</td></tr>
+          <tr><td>1,000² Schleswig-Holstein</td><td class="n">33.3 / 37.3 ms</td><td class="n">30.2 / 34.3 ms</td></tr>
+          <tr><td>1,000² Europe-wide (car-v2: road junctions)</td><td class="n">35.4 / 39.8 ms</td><td class="n">32.2 / 37.0 ms</td></tr>
+          <tr><td>2,000² / 5,000² Hamburg</td><td class="n">79 / 97 · 486 / 502 ms</td><td class="n">76 / 91 · 471 / 475 ms</td></tr>
+          <tr><td>1 × 1,000 / 1,000 × 1 Hamburg</td><td class="n">10.6 / 11.5 · 8.5 / 8.8 ms</td><td class="n">10.1 / 11.2 · 7.6 / 8.0 ms</td></tr>
+          <tr><td>1,000² with <code>bench/try_api.py</code> (Python standard library, incl. decoding)</td><td class="n">&mdash;</td><td class="n">32.0 / 33.5 ms; 32.5 / 33.9 ms via the public address</td></tr>
+        </tbody>
+      </table>
+    </div>
 
     <section class="col" id="operations">
       <h2><span class="num">7</span>Operations</h2>
       <p><strong>Deployment.</strong> One stateless process per host under a hardened systemd unit; one immutable dataset directory per OSM snapshot with an atomic <code>current</code> symlink; binary and datasets in a private S3 bucket. A new host boots from user data, pulls both and is serving in under two minutes.</p>
       <p><strong>Memory.</strong> 19.4 GB locked: hierarchy arcs 7.1 GB, road chains 7.1 GB, geometry 2.5 GB, coordinates 1.9 GB, offsets 0.9 GB, spatial index 0.3 GB, turn tables 33 MB. About 11 GB remain for request buffers, which admission control bounds.</p>
       <p><strong>Startup.</strong> 2.7 s warm; 101 s after a reboot, 82 s of it reading 19 GB from disk.</p>
-      <p><strong>Data refresh.</strong> One command launches a self-terminating spot builder that takes the newest planet from the AWS open-data bucket, builds it in 51 min and publishes <code>datasets/planet-YYMMDD</code> with its build log &mdash; about $0.50 per build. A second command switches a host to it and keeps the previous one for rollback. Weekly is the recommended cadence; production should run two hosts behind a load balancer to update without downtime.</p>
+      <p><strong>Data refresh.</strong> One command launches a self-terminating spot builder that takes the newest planet from the AWS open-data bucket, builds it in 51 min and publishes <code>datasets/planet-YYMMDD</code> with its build log &mdash; about $0.50 per build. On a host, <code>infra/deploy/upgrade.sh planet-YYMMDD</code> installs the current release binary and that dataset and keeps the previous dataset for rollback; the previous release stays in S3. Weekly is the recommended cadence; production should run two hosts behind a load balancer to update without downtime.</p>
     </section>
     <div class="table-wrap">
       <table class="wide">
@@ -433,14 +492,14 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
     </div>
     <div class="col">
       <p><strong>Observability.</strong> Structured JSON logs; Prometheus metrics for requests by status, compute and queue-wait histograms by size, cells in flight, unsnapped points and the loaded dataset. Suggested alerts: 1,000² compute p99 above 50 ms, any 503, a jump in unsnapped points, a dataset older than 14 days.</p>
-      <p><strong>Security.</strong> No authentication, as specified; the service belongs in a private subnet reachable only from the optimiser. Put an internal load balancer in front for TLS.</p>
+      <p><strong>Security.</strong> No authentication, as specified; in production the service belongs in a private subnet reachable only from the optimiser, with an internal load balancer in front for TLS. The demo instance is deliberately public so that it can be tested: request limits and admission control keep it stable under abuse, but there is no per-client quota, so one heavy client can make others queue.</p>
     </div>
 
     <section class="col" id="using">
       <h2><span class="num">8</span>Calling it</h2>
       <p>The request is exactly the specified one; <code>sources</code> and <code>destinations</code> are optional index lists. Ask for the binary body with its media type:</p>
     </section>
-    <pre>curl -s -X POST http://&lt;host&gt;:8080/matrix \
+    <pre>curl -s -X POST http://100.57.61.188:8080/matrix \
   -H 'content-type: application/json' \
   -H 'accept: application/vnd.distance-matrix.v1' \
   -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}' -o m.bin
@@ -449,7 +508,8 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
 m = np.frombuffer(open("m.bin", "rb").read(), "&lt;u4", offset=16).reshape(rows, 2, cols)
 distances, times = m[:, 0], m[:, 1]          # zero-copy views</pre>
     <div class="col">
-      <p>Without the <code>accept</code> header the answer is the specified JSON &mdash; for the example above <code>{"distances":[[0,17509,48029],[17501,0,35181],[47995,35181,0]],"times":[[0,1079,2864],[1066,0,2461],[2854,2461,0]]}</code>.</p>
+      <p>Without the <code>accept</code> header the answer is the specified JSON &mdash; for the example above <code>{"distances":[[0,18070,48928],[18062,0,36030],[48894,36030,0]],"times":[[0,1213,3080],[1200,0,2665],[3070,2665,0]]}</code>.</p>
+      <p><strong>Try it.</strong> A public instance serves the whole planet at <code>http://100.57.61.188:8080</code> (one c5a.4xlarge in AWS us-east-1, availability zone ID <code>use1-az5</code>). <code>python3 bench/try_api.py --points 1000 --center 53.55,10.0</code> sends 1,000 random points around a city and prints time to last byte; it needs only Python's standard library. Outside AWS the numbers include your internet round trip and the time your line needs for 8 MB; the 100 ms target is for a client in the same region.</p>
     </div>
 
     <section class="col" id="next">

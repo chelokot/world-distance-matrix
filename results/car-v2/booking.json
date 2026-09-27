@@ -1,0 +1,36 @@
+[
+  {
+    "bytes": 8016,
+    "concurrency": 1,
+    "decode_p50_ms": 0.00152,
+    "format": "binary",
+    "label": "hamburg",
+    "requests": 200,
+    "shape": "row",
+    "size": 1000,
+    "throughput_rps": 98.55253157120984,
+    "total_p50_ms": 10.097585,
+    "total_p99_ms": 11.238622,
+    "ttlb_max_ms": 11.430352,
+    "ttlb_p50_ms": 10.096615,
+    "ttlb_p90_ms": 10.663989,
+    "ttlb_p99_ms": 11.237012
+  },
+  {
+    "bytes": 8016,
+    "concurrency": 1,
+    "decode_p50_ms": 0.018361,
+    "format": "binary",
+    "label": "hamburg",
+    "requests": 200,
+    "shape": "column",
+    "size": 1000,
+    "throughput_rps": 132.15615109588524,
+    "total_p50_ms": 7.57975,
+    "total_p99_ms": 7.983193,
+    "ttlb_max_ms": 8.246908000000001,
+    "ttlb_p50_ms": 7.556658,
+    "ttlb_p90_ms": 7.755591,
+    "ttlb_p99_ms": 7.956840999999999
+  }
+]
