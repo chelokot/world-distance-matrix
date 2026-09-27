@@ -196,24 +196,34 @@ impl<'n> MatrixJob<'n> {
         }
     }
 
+    fn fill_row(&self, search: &mut UpwardSearch, row: &mut [Weight], source: &Endpoint, out: &mut [u32]) {
+        self.row(search, source, row);
+        let (distances, durations) = out.split_at_mut(row.len());
+        for ((weight, distance), duration) in row.iter().zip(distances).zip(durations) {
+            let value = RouteValue::from_weight(*weight);
+            *distance = value.distance_m;
+            *duration = value.duration_s;
+        }
+    }
+
     pub fn compute_rows(&self, rows: Range<usize>, out: &mut [u32]) {
         let width = self.targets.len();
         assert_eq!(out.len(), rows.len() * 2 * width);
         if width == 0 {
             return;
         }
-        out.par_chunks_mut(2 * width).zip(&self.sources[rows]).for_each_init(
-            || (UpwardSearch::default(), vec![UNREACHABLE; width]),
-            |(search, row), (chunk, source)| {
-                self.row(search, source, row);
-                let (distances, durations) = chunk.split_at_mut(width);
-                for ((weight, distance), duration) in row.iter().zip(distances).zip(durations) {
-                    let value = RouteValue::from_weight(*weight);
-                    *distance = value.distance_m;
-                    *duration = value.duration_s;
-                }
-            },
-        );
+        out.par_chunks_mut(2 * width)
+            .zip(&self.sources[rows])
+            .for_each_init(|| (UpwardSearch::default(), vec![UNREACHABLE; width]), |(search, row), (chunk, source)| self.fill_row(search, row, source, chunk));
+    }
+
+    pub fn compute_rows_on_this_thread(&self, rows: Range<usize>, out: &mut [u32]) {
+        let width = self.targets.len();
+        assert_eq!(out.len(), rows.len() * 2 * width);
+        let (mut search, mut row) = (UpwardSearch::default(), vec![UNREACHABLE; width]);
+        for (chunk, source) in out.chunks_exact_mut(2 * width.max(1)).zip(&self.sources[rows]) {
+            self.fill_row(&mut search, &mut row, source, chunk);
+        }
     }
 }
 

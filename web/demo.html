@@ -92,6 +92,7 @@ a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; bo
 const WASM_GZIP_BASE64 = "__WASM_GZIP_BASE64__";
 const API = location.port === "8080" ? location.origin : "http://3.65.232.220:8080";
 const MEDIA = { compact: "application/vnd.distance-matrix.compact.v1", binary: "application/vnd.distance-matrix.v1", json: "application/json" };
+const REQUEST = "application/vnd.distance-matrix.request.v1";
 const NO_ROUTE = 0xffffffff;
 const FRANKFURT = [50.1109, 8.6821];
 const COLORS = { connect: "var(--grey)", travel: "var(--blue)", queue: "var(--grey)", prepare: "var(--amber)", compute: "var(--orange)", download: "var(--green)", decode: "var(--violet)" };
@@ -112,8 +113,21 @@ async function loadWasm() {
 }
 
 const view = (Type, pointer, length) => new Type(wasm.memory.buffer, pointer, length);
-const coordinates = (list) => list.map(([lat, lon]) => ({ lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 }));
-const post = (url, body, accept) => fetch(url, { method: "POST", headers: { "content-type": "application/json", accept }, body: JSON.stringify(body) });
+function encodeRequest(list, indices, json) {
+  if (json) return JSON.stringify({ coordinates: list.map(([lat, lon]) => ({ lat: Math.round(lat * 1e7) / 1e7, lon: Math.round(lon * 1e7) / 1e7 })), ...indices });
+  const sources = indices.sources ?? [], destinations = indices.destinations ?? [];
+  const data = new DataView(new ArrayBuffer(16 + 8 * list.length + 4 * (sources.length + destinations.length)));
+  [..."DMQ1"].forEach((c, i) => data.setUint8(i, c.charCodeAt(0)));
+  [list.length, sources.length, destinations.length].forEach((value, i) => data.setUint32(4 + 4 * i, value, true));
+  list.forEach(([lat, lon], i) => { data.setInt32(16 + 8 * i, Math.round(lat * 1e7), true); data.setInt32(20 + 8 * i, Math.round(lon * 1e7), true); });
+  [...sources, ...destinations].forEach((value, i) => data.setUint32(16 + 8 * list.length + 4 * i, value, true));
+  return data.buffer;
+}
+function post(url, list, indices, accept) {
+  const json = accept === MEDIA.json;
+  const body = encodeRequest(list, indices, json);
+  return { size: json ? new TextEncoder().encode(body).length : body.byteLength, response: fetch(url, { method: "POST", headers: { "content-type": json ? "application/json" : REQUEST, accept }, body }) };
+}
 const ms = (value) => (value >= 100 ? value.toFixed(0) : value.toFixed(1)) + " ms";
 const km = (metres) => (metres >= 100000 ? Math.round(metres / 1000).toLocaleString("en") : (metres / 1000).toFixed(1)) + " km";
 const bytes = (count) => (count >= 1e6 ? (count / 1e6).toFixed(2) + " MB" : (count / 1e3).toFixed(1) + " kB");
@@ -128,11 +142,9 @@ function crowFlies([lat1, lon1], [lat2, lon2]) {
 }
 
 async function connectedToFrankfurt(candidates) {
-  const all = coordinates([FRANKFURT, ...candidates]);
-  const [outward, inward] = await Promise.all([
-    post(`${API}/matrix`, { coordinates: all, sources: [0] }, MEDIA.binary).then((r) => r.arrayBuffer()),
-    post(`${API}/matrix`, { coordinates: all, destinations: [0] }, MEDIA.binary).then((r) => r.arrayBuffer()),
-  ]);
+  const all = [FRANKFURT, ...candidates];
+  const outward = await post(`${API}/matrix`, all, { sources: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
+  const inward = await post(`${API}/matrix`, all, { destinations: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
   const there = new Uint32Array(outward, 16), back = new Uint32Array(inward, 16);
   return candidates.filter((_, k) => there[k + 1] !== NO_ROUTE && back[2 * (k + 1)] !== NO_ROUTE);
 }
@@ -160,6 +172,13 @@ async function spread() {
     $("spread-status").textContent = `${points.length.toLocaleString("en")} points: ${kept.length.toLocaleString("en")} of ${checked.toLocaleString("en")} evenly spaced candidates were within 5 km of a road connected both ways with Frankfurt.`;
     matrix = null;
     drawPoints();
+    const summary = $("spread-status").textContent;
+    $("spread-status").textContent = `${summary} Warming up the connection…`;
+    const warmUpStarted = performance.now();
+    await post(`${API}/matrix?warm-up=${Date.now()}`, points, {}, MEDIA.binary).response.then((r) => r.arrayBuffer());
+    const warmUp = ms(performance.now() - warmUpStarted);
+    history = [`warm-up ${warmUp}`, ...history].slice(0, 6);
+    $("spread-status").textContent = `${summary} The connection was warmed up with one uncompressed 8 MB transfer (${warmUp}): a fresh TCP connection has not yet measured your bandwidth, so its first large answer is slow, as it would be for any client. Real clients keep their connection open.`;
     $("run").disabled = false;
   } catch (error) {
     $("spread-status").innerHTML = `<span class="error">Could not reach the server: ${error.message}</span>`;
@@ -218,20 +237,21 @@ function serverTiming(header) {
 
 async function compute() {
   const url = `${API}/matrix?run=${++runs}`;
-  const body = { coordinates: coordinates(points) };
   busy(true);
   $("run-status").textContent = `Requesting ${(points.length ** 2).toLocaleString("en")} routes…`;
   try {
     performance.clearResourceTimings();
-    const response = await post(url, body, MEDIA[format]);
+    const request = post(url, points, {}, MEDIA[format]);
+    const response = await request.response;
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-    let server, received, wireBytes = 0;
+    let server, received, wireBytes = 0, closed = Promise.resolve();
     if (format === "compact") {
       wasm.stream_start();
       let decoding = 0;
-      for (const reader = response.body.getReader(); ;) {
+      const reader = response.body.getReader();
+      while (!wasm.stream_complete()) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) throw new Error("the response ended early");
         const started = performance.now();
         view(Uint8Array, wasm.input(value.length), value.length).set(value);
         if (!wasm.stream_feed()) throw new Error("the response could not be decoded");
@@ -239,6 +259,7 @@ async function compute() {
         wireBytes += value.length;
       }
       received = performance.now();
+      closed = reader.read().then(({ done }) => done || reader.cancel());
       if (!wasm.stream_finish()) throw new Error("the response ended early");
       const [queue, prepare, total] = Array.from(view(Uint32Array, wasm.server_times(), 3), (us) => us / 1000);
       server = { queue, prepare, beforeFirstByte: queue + prepare, compute: total, decoding };
@@ -268,8 +289,9 @@ async function compute() {
       matrix = { rows: header.getUint32(8, true), cols: header.getUint32(12, true), received, decoded: performance.now() };
       server = { queue: serverTiming(response.headers.get("server-timing")).queue };
     }
+    await closed;
     const entry = performance.getEntriesByName(url).at(-1);
-    render(entry, server, wireBytes);
+    render(entry, server, wireBytes, request.size);
     $("run-status").textContent = "";
     showPair();
   } catch (error) {
@@ -279,7 +301,7 @@ async function compute() {
   }
 }
 
-function render(entry, server, decodedBytes) {
+function render(entry, server, decodedBytes, requestBytes) {
   const start = entry.startTime, at = (time) => time - start;
   const detailed = entry.responseStart > 0;
   const requestStart = detailed ? at(entry.requestStart) : 0;
@@ -323,7 +345,7 @@ function render(entry, server, decodedBytes) {
   const summary = view(Float64Array, wasm.summary(), 5);
   const wire = entry.encodedBodySize || decodedBytes;
   const raw = matrix.rows * matrix.cols * 8;
-  $("facts").textContent = `${(matrix.rows * matrix.cols).toLocaleString("en")} routes · ${bytes(wire)} on the wire (${((100 * wire) / raw).toFixed(0)} % of the raw 4-byte values) · ${(100 * summary[0]).toFixed(1)} % of pairs have a route · median ${km(summary[1])}, ${drive(summary[2])} · longest ${km(summary[3])}, ${drive(summary[4])}`
+  $("facts").textContent = `${(matrix.rows * matrix.cols).toLocaleString("en")} routes · request ${bytes(requestBytes)} · answer ${bytes(wire)} on the wire (${((100 * wire) / raw).toFixed(0)} % of the raw 4-byte values) · ${(100 * summary[0]).toFixed(1)} % of pairs have a route · median ${km(summary[1])}, ${drive(summary[2])} · longest ${km(summary[3])}, ${drive(summary[4])}`
     + (known ? ` · server work ${ms(server.queue + server.compute)} of ${ms(total)}` : "");
   history = [`${format} ${ms(total)}`, ...history].slice(0, 6);
   $("history").textContent = `Recent runs: ${history.join(" · ")}`;

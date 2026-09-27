@@ -50,7 +50,7 @@ pub struct CompactDecoder {
 }
 
 impl CompactDecoder {
-    pub fn feed(&mut self, bytes: &[u8], decompress: &mut impl FnMut(&[u8], usize) -> Result<Vec<u8>, String>) -> Result<(), String> {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<(), String> {
         let mut pending = std::mem::take(&mut self.pending);
         pending.extend_from_slice(bytes);
         let mut offset = 0;
@@ -78,17 +78,16 @@ impl CompactDecoder {
                     self.stage = if frames == 0 { Stage::Trailer } else { Stage::Frames(frames) };
                 }
                 Stage::Frames(left) => {
-                    if available.len() < 8 {
+                    if available.len() < 4 {
                         break;
                     }
-                    let [frame_rows, size] = words(&available[..8])[..] else { unreachable!("two words") };
-                    let (frame_rows, size) = (frame_rows as usize, size as usize);
-                    if available.len() < 8 + size {
+                    let frame_rows = words(&available[..4])[0] as usize;
+                    let size = payload_len(frame_rows * self.matrix.cols);
+                    if available.len() < 4 + size {
                         break;
                     }
-                    let payload = decompress(&available[8..8 + size], payload_len(frame_rows * self.matrix.cols))?;
-                    self.decode_frame(frame_rows, &payload)?;
-                    offset += 8 + size;
+                    self.decode_frame(frame_rows, &available[4..4 + size])?;
+                    offset += 4 + size;
                     self.stage = if left == 1 { Stage::Trailer } else { Stage::Frames(left - 1) };
                 }
                 Stage::Trailer => {
@@ -111,25 +110,33 @@ impl CompactDecoder {
         let Self { matrix, previous, row_order, col_order, decoded_rows, .. } = self;
         let cols = matrix.cols;
         let cells = frame_rows * cols;
-        if payload.len() != payload_len(cells) || *decoded_rows + frame_rows > matrix.rows {
+        if *decoded_rows + frame_rows > matrix.rows {
             return Err("compact frame does not match the matrix".into());
         }
+        let (planes, no_route) = payload.split_at(8 * cells);
         for (index, (above, target)) in previous.iter_mut().zip([&mut matrix.distances, &mut matrix.durations]).enumerate() {
+            let plane = |byte: usize| &planes[(4 * index + byte) * cells..(4 * index + byte + 1) * cells];
+            let [b0, b1, b2, b3] = [plane(0), plane(1), plane(2), plane(3)];
             for row in 0..frame_rows {
+                let cells_of_row = row * cols..(row + 1) * cols;
                 let base = row_order[*decoded_rows + row] as usize * cols;
                 let (mut left, mut up_left) = (0i64, 0i64);
-                for (col, above) in above.iter_mut().enumerate() {
-                    let cell = row * cols + col;
-                    let zig = u32::from_le_bytes(std::array::from_fn(|byte| payload[(4 * index + byte) * cells + cell]));
-                    let value = unzigzag(zig) + *above + left - up_left;
+                let bytes = b0[cells_of_row.clone()].iter().zip(&b1[cells_of_row.clone()]).zip(&b2[cells_of_row.clone()]).zip(&b3[cells_of_row]);
+                for (col, (above, (((&a, &b), &c), &d))) in above.iter_mut().zip(bytes).enumerate() {
+                    let value = unzigzag(u32::from_le_bytes([a, b, c, d])) + *above + left - up_left;
                     (up_left, left, *above) = (*above, value, value);
-                    let no_route = (payload[8 * cells + cell / 8] >> (cell % 8)) & 1 == 1;
-                    target[base + col_order[col] as usize] = if no_route { NO_ROUTE } else { value as u32 };
+                    let cell = row * cols + col;
+                    let unreachable = (no_route[cell / 8] >> (cell % 8)) & 1 == 1;
+                    target[base + col_order[col] as usize] = if unreachable { NO_ROUTE } else { value as u32 };
                 }
             }
         }
         *decoded_rows += frame_rows;
         Ok(())
+    }
+
+    pub fn is_complete(&self) -> bool {
+        matches!(self.stage, Stage::Done(_))
     }
 
     pub fn finish(self) -> Result<(DecodedMatrix, ServerTimes), String> {
@@ -140,8 +147,8 @@ impl CompactDecoder {
     }
 }
 
-pub fn decode(body: &[u8], mut decompress: impl FnMut(&[u8], usize) -> Result<Vec<u8>, String>) -> Result<(DecodedMatrix, ServerTimes), String> {
+pub fn decode(body: &[u8]) -> Result<(DecodedMatrix, ServerTimes), String> {
     let mut decoder = CompactDecoder::default();
-    decoder.feed(body, &mut decompress)?;
+    decoder.feed(body)?;
     decoder.finish()
 }

@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 itoa = "1"
 zstd = "0.13"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 
 [dev-dependencies]
 rand.workspace = true

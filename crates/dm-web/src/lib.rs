@@ -1,18 +1,7 @@
 use std::cell::RefCell;
-use std::io::Read;
 
-use dm_wire::compact::{CompactDecoder, ServerTimes};
-use dm_wire::{binary, compact, DecodedMatrix, NO_ROUTE};
-
-fn decompress_frame(frame: &[u8], len: usize) -> Result<Vec<u8>, String> {
-    let mut payload = Vec::with_capacity(len);
-    ruzstd::decoding::StreamingDecoder::new(frame).map_err(|e| e.to_string())?.read_to_end(&mut payload).map_err(|e| e.to_string())?;
-    Ok(payload)
-}
-
-pub fn decode_compact(body: &[u8]) -> Result<(DecodedMatrix, ServerTimes), String> {
-    compact::decode(body, decompress_frame)
-}
+use dm_wire::compact::CompactDecoder;
+use dm_wire::{binary, DecodedMatrix, NO_ROUTE};
 
 pub fn in_eurasia(lat: f64, lon: f64) -> bool {
     let in_box = (1.0..=75.0).contains(&lat) && (-10.5..=180.0).contains(&lon);
@@ -108,7 +97,12 @@ pub extern "C" fn stream_start() {
 
 #[no_mangle]
 pub extern "C" fn stream_feed() -> u32 {
-    STATE.with_borrow_mut(|state| state.stream.feed(&state.input, &mut decompress_frame).is_ok() as u32)
+    STATE.with_borrow_mut(|state| state.stream.feed(&state.input).is_ok() as u32)
+}
+
+#[no_mangle]
+pub extern "C" fn stream_complete() -> u32 {
+    STATE.with_borrow(|state| state.stream.is_complete() as u32)
 }
 
 #[no_mangle]
@@ -169,26 +163,42 @@ pub extern "C" fn points() -> *const f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dm_core::compact::{compact_header, CompactEncoder};
+    use dm_core::compact::{compact_header, encode_frame};
+    use dm_wire::compact::{ServerTimes, FRAME_ROWS};
 
     #[test]
-    fn decodes_what_the_server_encodes() {
+    fn streams_what_the_server_encodes() {
         let (rows, cols) = (70, 45);
-        let interleaved: Vec<u32> =
-            (0..rows * 2 * cols).map(|i| if i % 11 == 0 { NO_ROUTE } else { (i as u32).wrapping_mul(2_654_435_761) % 40_000_000 }).collect();
-        let interleaved: Vec<u32> = interleaved
-            .chunks_exact(2 * cols)
+        let interleaved: Vec<u32> = (0..rows)
             .flat_map(|row| {
-                let (distances, durations) = row.split_at(cols);
-                let durations = durations.iter().zip(distances).map(|(&t, &d)| if d == NO_ROUTE { NO_ROUTE } else { t.min(NO_ROUTE - 1) });
-                distances.iter().copied().chain(durations).collect::<Vec<_>>()
+                let distances: Vec<u32> =
+                    (0..cols).map(|col| if (row + col) % 11 == 0 { NO_ROUTE } else { ((row * 7_919 + col * 104_729) % 40_000_000) as u32 }).collect();
+                let durations: Vec<u32> = distances.iter().map(|&d| if d == NO_ROUTE { NO_ROUTE } else { d / 17 }).collect();
+                distances.into_iter().chain(durations)
             })
             .collect();
         let (row_order, col_order): (Vec<u32>, Vec<u32>) = ((0..rows as u32).rev().collect(), (0..cols as u32).collect());
         let times = ServerTimes { queue_us: 3, prepare_us: 400, compute_us: 9_000 };
-        let body: Vec<u8> =
-            compact_header(&row_order, &col_order).into_iter().chain(CompactEncoder::new(cols).encode(&interleaved)).chain(times.to_bytes()).collect();
-        assert_eq!(decode_compact(&body).unwrap(), dm_core::compact::decode_compact(&body).unwrap());
+        let row = 2 * cols;
+        let frames: Vec<u8> = interleaved
+            .chunks(FRAME_ROWS * row)
+            .enumerate()
+            .flat_map(|(index, frame)| encode_frame(cols, (index > 0).then(|| &interleaved[(index * FRAME_ROWS - 1) * row..index * FRAME_ROWS * row]), frame))
+            .collect();
+        let body = [compact_header(&row_order, &col_order), frames, times.to_bytes()].concat();
+        stream_start();
+        for piece in body.chunks(1_000) {
+            assert_eq!(stream_complete(), 0);
+            STATE.with_borrow_mut(|state| state.input = piece.to_vec());
+            assert_eq!(stream_feed(), 1);
+        }
+        assert_eq!(stream_complete(), 1);
+        assert_eq!(stream_finish(), 1);
+        let (expected, _) = dm_core::compact::decode_compact(&body).unwrap();
+        STATE.with_borrow(|state| {
+            assert_eq!(state.matrix, expected);
+            assert_eq!(state.times, [3, 400, 9_000]);
+        });
     }
 
     #[test]

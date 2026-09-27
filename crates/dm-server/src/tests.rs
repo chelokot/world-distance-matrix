@@ -14,6 +14,7 @@ use dm_core::snap::{snap, SnapConfig};
 use dm_core::store::Residency;
 use dm_wire::binary::{decode as decode_binary, CONTENT_TYPE as BINARY_CONTENT_TYPE};
 use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
+use dm_wire::request;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -178,11 +179,53 @@ async fn compact_bodies_decode_to_the_binary_matrix() {
         let (status, headers, compact) = call(app(), "POST", "/matrix", body, Some(COMPACT_CONTENT_TYPE)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], COMPACT_CONTENT_TYPE);
-        assert!(compact.len() * 3 < binary.len(), "{} compact bytes vs {} binary", compact.len(), binary.len());
         let (matrix, times) = decode_compact(&compact).unwrap();
         assert_eq!(matrix, decode_binary(&binary).unwrap());
         assert!(times.prepare_us <= times.compute_us, "{times:?}");
     }
+    let (_, _, binary) = call(app(), "POST", "/matrix", body_for(&points, json!({})), Some(BINARY_CONTENT_TYPE)).await;
+    for (accept_encoding, content_encoding) in [("gzip, zstd", "zstd"), ("gzip, deflate", "gzip")] {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/matrix")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, COMPACT_CONTENT_TYPE)
+            .header(header::ACCEPT_ENCODING, accept_encoding)
+            .body(Body::from(body_for(&points, json!({}))))
+            .expect("request");
+        let response = app().oneshot(request).await.unwrap();
+        assert_eq!(response.headers()[header::CONTENT_ENCODING], content_encoding);
+        let compressed = response.into_body().collect().await.unwrap().to_bytes();
+        let body = if content_encoding == "zstd" {
+            zstd::stream::decode_all(&compressed[..]).unwrap()
+        } else {
+            let mut body = Vec::new();
+            flate2::read::GzDecoder::new(&compressed[..]).read_to_end(&mut body).unwrap();
+            body
+        };
+        assert!(compressed.len() * 3 < binary.len(), "{content_encoding}: {} bytes vs {} binary", compressed.len(), binary.len());
+        assert_eq!(decode_compact(&body).unwrap().0, decode_binary(&binary).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn binary_requests_match_json_requests() {
+    let points = kiel_points(40);
+    let extra = json!({ "sources": [3, 1, 4], "destinations": [5, 9, 2, 6] });
+    let (_, _, from_json) = call(app(), "POST", "/matrix", body_for(&points, extra), Some(BINARY_CONTENT_TYPE)).await;
+    let coordinates = points.iter().map(|&(lat, lon)| ((lat * 1e7).round() as i32, (lon * 1e7).round() as i32)).collect();
+    let body = request::encode(&request::Request { coordinates, sources: Some(vec![3, 1, 4]), destinations: Some(vec![5, 9, 2, 6]) });
+    let binary_request = Request::builder()
+        .method("POST")
+        .uri("/matrix")
+        .header(header::CONTENT_TYPE, request::CONTENT_TYPE)
+        .header(header::ACCEPT, BINARY_CONTENT_TYPE)
+        .body(Body::from(body))
+        .expect("request");
+    let response = app().oneshot(binary_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let from_binary = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(decode_binary(&from_binary).unwrap(), decode_binary(&from_json).unwrap());
 }
 
 #[tokio::test]

@@ -1,8 +1,10 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use dm_core::compact::Transport;
 use dm_core::geo::Coord;
 use dm_wire::binary::CONTENT_TYPE as BINARY_CONTENT_TYPE;
 use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
+use dm_wire::request;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -48,6 +50,7 @@ pub struct MatrixSpec {
     pub sources: Vec<usize>,
     pub destinations: Vec<usize>,
     pub format: Format,
+    pub transport: Transport,
 }
 
 impl MatrixSpec {
@@ -108,6 +111,22 @@ pub fn negotiate(headers: &HeaderMap) -> Result<Format, ApiError> {
     }
 }
 
+pub fn transport(headers: &HeaderMap) -> Transport {
+    let accepts = |name: &str| {
+        headers.get_all(header::ACCEPT_ENCODING).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(|coding| {
+            let mut parts = coding.split(';').map(str::trim);
+            parts.next() == Some(name) && parts.all(|parameter| parameter.strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()).is_none_or(|q| q > 0.0))
+        })
+    };
+    if accepts("zstd") {
+        Transport::Zstd
+    } else if accepts("gzip") {
+        Transport::Gzip
+    } else {
+        Transport::Identity
+    }
+}
+
 fn indices(name: &str, given: Option<Vec<usize>>, count: usize) -> Result<Vec<usize>, ApiError> {
     let indices = given.unwrap_or_else(|| (0..count).collect());
     if indices.is_empty() {
@@ -120,6 +139,21 @@ fn indices(name: &str, given: Option<Vec<usize>>, count: usize) -> Result<Vec<us
 }
 
 impl MatrixRequest {
+    pub fn parse(headers: &HeaderMap, body: &[u8]) -> Result<Self, ApiError> {
+        let invalid = |reason: String| ApiError::BadRequest(format!("invalid request body: {reason}"));
+        let content_type = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).and_then(|value| value.split(';').next());
+        if content_type.map(str::trim) != Some(request::CONTENT_TYPE) {
+            return serde_json::from_slice(body).map_err(|e| invalid(e.to_string()));
+        }
+        let decoded = request::decode(body).map_err(invalid)?;
+        let indices = |list: Option<Vec<u32>>| list.map(|list| list.into_iter().map(|index| index as usize).collect());
+        Ok(Self {
+            coordinates: decoded.coordinates.iter().map(|&(lat, lon)| Location { lat: lat as f64 / 1e7, lon: lon as f64 / 1e7 }).collect(),
+            sources: indices(decoded.sources),
+            destinations: indices(decoded.destinations),
+        })
+    }
+
     pub fn validate(self, format: Format, limits: &Limits) -> Result<MatrixSpec, ApiError> {
         let count = self.coordinates.len();
         if count == 0 {
@@ -141,8 +175,13 @@ impl MatrixRequest {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let spec =
-            MatrixSpec { coords, sources: indices("sources", self.sources, count)?, destinations: indices("destinations", self.destinations, count)?, format };
+        let spec = MatrixSpec {
+            coords,
+            sources: indices("sources", self.sources, count)?,
+            destinations: indices("destinations", self.destinations, count)?,
+            format,
+            transport: Transport::Identity,
+        };
         let limit = match format {
             Format::Json => limits.max_json_cells,
             Format::Binary | Format::Compact => limits.max_cells,
@@ -189,6 +228,20 @@ mod tests {
     fn rectangular_requests_are_counted_by_cells() {
         let json = r#"{"coordinates":[{"lat":1,"lon":0},{"lat":1,"lon":0},{"lat":1,"lon":0},{"lat":1,"lon":0},{"lat":1,"lon":0}],"sources":[4]}"#;
         assert_eq!(request(json).validate(Format::Json, &LIMITS).unwrap().cells(), 5);
+    }
+
+    #[test]
+    fn prefers_zstd_then_gzip() {
+        let chosen = |value: &'static str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
+            transport(&headers)
+        };
+        assert_eq!(chosen("gzip, deflate, br, zstd"), Transport::Zstd);
+        assert_eq!(chosen("zstd;q=0.5"), Transport::Zstd);
+        assert_eq!(chosen("gzip, zstd;q=0"), Transport::Gzip);
+        assert_eq!(chosen("br, deflate"), Transport::Identity);
+        assert_eq!(transport(&HeaderMap::new()), Transport::Identity);
     }
 
     #[test]

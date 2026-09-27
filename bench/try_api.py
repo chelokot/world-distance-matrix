@@ -11,6 +11,7 @@ import time
 import urllib.parse
 
 ACCEPT = {"binary": "application/vnd.distance-matrix.v1", "compact": "application/vnd.distance-matrix.compact.v1", "json": "application/json"}
+REQUEST = "application/vnd.distance-matrix.request.v1"
 NO_ROUTE = 0xFFFFFFFF
 
 
@@ -28,12 +29,17 @@ def on_globe(count: int, rng: random.Random) -> list[tuple[float, float]]:
     return [(math.degrees(math.asin(2 * rng.random() - 1)), 360 * rng.random() - 180) for _ in range(count)]
 
 
-def body(points: list[tuple[float, float]], **extra) -> bytes:
-    return json.dumps({"coordinates": [{"lat": lat, "lon": lon} for lat, lon in points], **extra}).encode()
+def body(points: list[tuple[float, float]], binary: bool, sources: list[int] = (), destinations: list[int] = ()) -> bytes:
+    if not binary:
+        indices = {name: list(values) for name, values in (("sources", sources), ("destinations", destinations)) if values}
+        return json.dumps({"coordinates": [{"lat": lat, "lon": lon} for lat, lon in points], **indices}).encode()
+    coordinates = [round(value * 1e7) for point in points for value in point]
+    return b"DMQ1" + struct.pack(f"<3I{len(coordinates)}i{len(sources) + len(destinations)}I", len(points), len(sources), len(destinations), *coordinates, *sources, *destinations)
 
 
 def post(connection: http.client.HTTPConnection, payload: bytes, format: str) -> http.client.HTTPResponse:
-    connection.request("POST", "/matrix", payload, {"Content-Type": "application/json", "Accept": ACCEPT[format]})
+    content_type = REQUEST if payload[:4] == b"DMQ1" else "application/json"
+    connection.request("POST", "/matrix", payload, {"Content-Type": content_type, "Accept": ACCEPT[format], "Accept-Encoding": "zstd" if format == "compact" else "identity"})
     response = connection.getresponse()
     if response.status != 200:
         raise SystemExit(f"HTTP {response.status}: {response.read()[:300].decode(errors='replace')}")
@@ -46,29 +52,26 @@ def near_roads(connection: http.client.HTTPConnection, count: int, rng: random.R
         batch = on_globe(250, rng)
         tried += len(batch)
         pairs = [point for lat, lon in batch for point in ((lat, lon), (lat + 1e-6, lon))]
-        data = post(connection, body(pairs, sources=list(range(0, 500, 2)), destinations=list(range(1, 500, 2))), "binary").read()
+        data = post(connection, body(pairs, True, list(range(0, 500, 2)), list(range(1, 500, 2))), "binary").read()
         distances = memoryview(data)[16:].cast("I")
         found += [point for k, point in enumerate(batch) if distances[k * 500 + k] != NO_ROUTE]
     return found[:count], tried
 
 
-def decode_compact(response: io.BytesIO):
+def decode_compact(stream: io.BytesIO):
     import numpy as np
-    from compression import zstd
 
-    _, rows, cols, frames = struct.unpack("<4sIII", response.read(16))
-    row_order = np.frombuffer(response.read(4 * rows), "<u4")
-    col_order = np.frombuffer(response.read(4 * cols), "<u4")
-    received = 16 + 4 * (rows + cols)
+    _, rows, cols, frames = struct.unpack("<4sIII", stream.read(16))
+    row_order = np.frombuffer(stream.read(4 * rows), "<u4")
+    col_order = np.frombuffer(stream.read(4 * cols), "<u4")
     encoded = np.empty((2, rows, cols), np.int64)
     no_route = np.empty((rows, cols), bool)
     previous = np.zeros((2, 1, cols), np.int64)
     first = 0
     for _ in range(frames):
-        height, size = struct.unpack("<II", response.read(8))
+        (height,) = struct.unpack("<I", stream.read(4))
         cells = height * cols
-        payload = zstd.decompress(response.read(size))
-        received += 8 + size
+        payload = stream.read(8 * cells + (cells + 7) // 8)
         planes = np.frombuffer(payload, np.uint8, 8 * cells).reshape(2, 4, cells)
         zigzag = np.ascontiguousarray(planes.transpose(0, 2, 1)).view("<u4").reshape(2, height, cols).astype(np.int64)
         block = previous + np.cumsum(np.cumsum((zigzag >> 1) ^ -(zigzag & 1), axis=2), axis=1)
@@ -76,12 +79,11 @@ def decode_compact(response: io.BytesIO):
         encoded[:, first : first + height] = block
         no_route[first : first + height] = np.unpackbits(np.frombuffer(payload, np.uint8, offset=8 * cells), count=cells, bitorder="little").reshape(height, cols)
         first += height
-    queue_us, prepare_us, compute_us = struct.unpack("<III", response.read(12))
-    received += 12
+    queue_us, prepare_us, compute_us = struct.unpack("<III", stream.read(12))
     encoded[:, no_route] = NO_ROUTE
     matrix = np.empty((2, rows, cols), np.uint32)
     matrix[:, row_order[:, None], col_order[None, :]] = encoded
-    return matrix[0], matrix[1], received, (queue_us / 1000, prepare_us / 1000, compute_us / 1000)
+    return matrix[0], matrix[1], (queue_us / 1000, prepare_us / 1000, compute_us / 1000)
 
 
 def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -> tuple[float, int, int, str]:
@@ -89,7 +91,12 @@ def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -
     response = post(connection, payload, format)
     server = response.getheader("server-timing", "")
     if format == "compact":
-        distances, _, size, (queue, prepare, compute) = decode_compact(io.BytesIO(response.read()))
+        from compression import zstd
+
+        data = response.read()
+        size = len(data)
+        body = zstd.decompress(data) if response.getheader("content-encoding") == "zstd" else data
+        distances, _, (queue, prepare, compute) = decode_compact(io.BytesIO(body))
         unreachable = int((distances == NO_ROUTE).sum())
         server = f"queue {queue:.1f} ms, snapping and setup {prepare:.1f} ms, all rows {compute:.1f} ms"
     elif format == "binary":
@@ -126,7 +133,7 @@ def main() -> None:
     else:
         center = tuple(float(part) for part in args.center.split(","))
         batches = [around(center, args.radius_km, args.points, rng) for _ in range(args.requests + 3)]
-    payloads = [body(points) for points in batches]
+    payloads = [body(points, args.format != "json") for points in batches]
     for payload in payloads[:3]:
         fetch(connection, payload, args.format)
     results = [fetch(connection, payload, args.format) for payload in payloads[3:]]

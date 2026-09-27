@@ -1,5 +1,6 @@
 pub mod binary;
 pub mod compact;
+pub mod request;
 
 pub const NO_ROUTE: u32 = u32::MAX;
 
