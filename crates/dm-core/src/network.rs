@@ -24,7 +24,11 @@ pub struct ChArc {
 impl ChArc {
     pub fn new(head: u32, flags: u32, weight: Weight) -> Self {
         debug_assert!(head <= NODE_MASK && flags & NODE_MASK == 0);
-        Self { head_and_flags: head | flags, time_ms: crate::weight::time_ms(weight), dist_dm: crate::weight::dist_dm(weight) }
+        Self {
+            head_and_flags: head | flags,
+            time_ms: u32::try_from(crate::weight::time_ms(weight)).expect("a hierarchy arc takes less than 49 days"),
+            dist_dm: crate::weight::dist_dm(weight),
+        }
     }
 
     pub fn head(&self) -> u32 {

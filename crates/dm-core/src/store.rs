@@ -9,7 +9,7 @@ use bytemuck::Pod;
 use memmap2::{Mmap, MmapOptions};
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {

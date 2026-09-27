@@ -2,18 +2,21 @@ use bytemuck::{Pod, Zeroable};
 
 pub type Weight = u64;
 
+const DIST_BITS: u32 = 29;
+
 pub const UNREACHABLE: Weight = 1 << 62;
 
 pub const fn pack(time_ms: u32, dist_dm: u32) -> Weight {
-    ((time_ms as u64) << 32) | dist_dm as u64
+    debug_assert!(dist_dm < 1 << DIST_BITS);
+    ((time_ms as u64) << DIST_BITS) | dist_dm as u64
 }
 
-pub const fn time_ms(weight: Weight) -> u32 {
-    (weight >> 32) as u32
+pub const fn time_ms(weight: Weight) -> u64 {
+    weight >> DIST_BITS
 }
 
 pub const fn dist_dm(weight: Weight) -> u32 {
-    weight as u32
+    (weight & ((1 << DIST_BITS) - 1)) as u32
 }
 
 pub const NOT_TRAVERSABLE: u32 = u32::MAX;
@@ -55,7 +58,7 @@ impl RouteValue {
         if weight >= UNREACHABLE {
             return Self::UNREACHABLE;
         }
-        Self { distance_m: (dist_dm(weight) + 5) / 10, duration_s: (time_ms(weight) + 500) / 1000 }
+        Self { distance_m: (dist_dm(weight) + 5) / 10, duration_s: ((time_ms(weight) + 500) / 1000) as u32 }
     }
 }
 
@@ -75,7 +78,15 @@ mod tests {
     #[test]
     fn unreachable_sums_do_not_overflow() {
         assert!(UNREACHABLE.checked_add(UNREACHABLE).is_some());
-        assert!(UNREACHABLE + pack(u32::MAX >> 1, u32::MAX >> 1) >= UNREACHABLE);
+        assert!(UNREACHABLE + pack(u32::MAX, (1 << DIST_BITS) - 1) >= UNREACHABLE);
+    }
+
+    #[test]
+    fn intercontinental_routes_stay_reachable() {
+        let week_and_11_500_km = pack(7 * 86_400_000, 115_000_000);
+        let cape_town_to_magadan = week_and_11_500_km + week_and_11_500_km;
+        assert!(cape_town_to_magadan < UNREACHABLE);
+        assert_eq!(RouteValue::from_weight(cape_town_to_magadan), RouteValue { distance_m: 23_000_000, duration_s: 14 * 86_400 });
     }
 
     #[test]
