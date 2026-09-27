@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use dm_build::{build, BuildConfig};
+use dm_core::compact::{decode_compact, COMPACT_CONTENT_TYPE};
 use dm_core::geo::Coord;
 use dm_core::network::Network;
 use dm_core::snap::{snap, SnapConfig};
@@ -164,6 +165,21 @@ async fn json_is_compressed_when_asked_and_binary_never() {
     assert_eq!(unpacked, plain);
     let response = app().oneshot(request(BINARY_CONTENT_TYPE)).await.unwrap();
     assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+}
+
+#[tokio::test]
+async fn compact_bodies_decode_to_the_binary_matrix() {
+    let mut points = kiel_points(300);
+    points.extend([(54.6, 10.9), points[5]]);
+    for extra in [json!({}), json!({ "sources": (0..70).map(|i| i * 4).collect::<Vec<_>>() })] {
+        let body = body_for(&points, extra);
+        let (_, _, binary) = call(app(), "POST", "/matrix", body.clone(), Some(BINARY_CONTENT_TYPE)).await;
+        let (status, headers, compact) = call(app(), "POST", "/matrix", body, Some(COMPACT_CONTENT_TYPE)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], COMPACT_CONTENT_TYPE);
+        assert!(compact.len() * 3 < binary.len(), "{} compact bytes vs {} binary", compact.len(), binary.len());
+        assert_eq!(decode_compact(&compact).unwrap(), decode_binary(&binary).unwrap());
+    }
 }
 
 #[tokio::test]

@@ -55,6 +55,28 @@ So `distance(i, j)` is the word at `16 + 4 * (2 * cols * i + j)` and `time(i, j)
 then `m[:, 0]` are distances and `m[:, 1]` times (zero-copy views). The body is streamed while rows are still being
 computed, with an exact `Content-Length`; a truncated body means the request failed.
 
+**Compact** (`Accept: application/vnd.distance-matrix.compact.v1`) — the same exact values in about a tenth of the
+binary size, for clients on slower links. Rows and columns are reordered along a Hilbert curve, so neighbouring rows
+and columns are neighbours on the map; every cell is then sent as its difference from what its neighbours predict
+(`v[i][j] − v[i−1][j] − v[i][j−1] + v[i−1][j−1]`, which is close to zero because nearby routes share most of their
+way), and bands of rows are zstd-compressed in parallel and streamed while later rows are computed. A 1,000-point
+Hamburg matrix is 0.8 MB instead of 8 MB; 1,000 points spread over every continent are 0.8 MB too. All integers are
+unsigned 32-bit little-endian:
+
+| offset | content                                                                                                  |
+|--------|----------------------------------------------------------------------------------------------------------|
+| 0      | magic `DMC1`                                                                                             |
+| 4      | `rows`, `cols`, `frames`                                                                                 |
+| 16     | row order: `rows` indices; encoded row `k` is row `row_order[k]` of the answer                             |
+| …      | column order: `cols` indices                                                                              |
+| …      | `frames` times: rows in the frame, compressed length, one zstd frame                                     |
+
+A decompressed frame of `h` rows holds, for its `h × cols` cells in encoded order, the four byte planes of the zigzag
+residuals of the distances, then those of the times, then one bit per cell (least significant first) set where there is
+no route. Cells without a route count as 0 and neighbours outside the matrix as 0, so a frame decodes as two cumulative
+sums added to the last row of the previous frame. `bench/try_api.py` has a 25-line numpy decoder (Python 3.14 for the
+standard-library zstd); `dm_core::compact::decode_compact` is the Rust one.
+
 **Semantics**
 
 * `[i][j]` is the route from `i` to `j`; matrices are asymmetric (one-way streets, one-way ferries/car trains).
@@ -111,6 +133,9 @@ Time to last byte for 1,000 random points around a city, measured by a client th
 ```bash
 python3 bench/try_api.py --points 1000 --center 53.55,10.0
 ```
+
+`--format compact` uses the compact format, `--world` draws the points uniformly from the whole globe (most land in
+the sea, more than 5 km from any road), and `--world --on-roads` keeps only points within 5 km of a road.
 
 From outside AWS the result includes the internet round trip and the time your line needs for 8 MB. The 100 ms target
 is for a client in the same region: run the script on any EC2 instance in us-east-1, ideally in `use1-az5`.

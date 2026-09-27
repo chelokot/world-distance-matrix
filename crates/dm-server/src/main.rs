@@ -16,6 +16,7 @@ use axum::routing::{get, post};
 use axum::serve::ListenerExt;
 use axum::Router;
 use clap::Parser;
+use dm_core::compact::COMPACT_CONTENT_TYPE;
 use dm_core::network::Network;
 use dm_core::snap::SnapConfig;
 use dm_core::store::Residency;
@@ -123,7 +124,9 @@ fn router(state: Arc<AppState>, max_locations: usize) -> Router {
         .route("/metrics", get(metrics))
         .layer(DefaultBodyLimit::max(max_locations * 256 + 65_536))
         .layer(
-            CompressionLayer::new().quality(CompressionLevel::Fastest).compress_when(DefaultPredicate::new().and(NotForContentType::new(BINARY_CONTENT_TYPE))),
+            CompressionLayer::new()
+                .quality(CompressionLevel::Fastest)
+                .compress_when(DefaultPredicate::new().and(NotForContentType::new(BINARY_CONTENT_TYPE)).and(NotForContentType::new(COMPACT_CONTENT_TYPE))),
         )
         .with_state(state)
 }

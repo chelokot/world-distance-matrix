@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{header, HeaderValue};
 use axum::response::Response;
 use bytes::Bytes;
+use dm_core::compact::{compact_header, spatial_order, CompactEncoder, COMPACT_CONTENT_TYPE, FRAME_ROWS};
 use dm_core::matrix::{Endpoint, MatrixJob};
 use dm_core::network::Network;
 use dm_core::snap::{snap, SnapConfig};
@@ -156,7 +157,7 @@ impl Engine {
     pub async fn matrix(self: &Arc<Self>, spec: MatrixSpec) -> Result<Response, ApiError> {
         let admitted = self.admit(spec.cells()).await?;
         match spec.format {
-            Format::Binary => self.binary(spec, admitted).await,
+            Format::Binary | Format::Compact => self.stream(spec, admitted).await,
             Format::Json => self.json(spec, admitted).await,
         }
     }
@@ -179,8 +180,18 @@ impl Engine {
         }
     }
 
-    async fn binary(self: &Arc<Self>, spec: MatrixSpec, admitted: Admitted) -> Result<Response, ApiError> {
+    async fn stream(self: &Arc<Self>, mut spec: MatrixSpec, admitted: Admitted) -> Result<Response, ApiError> {
         let (rows, cols) = (spec.sources.len(), spec.destinations.len());
+        let compact = spec.format == Format::Compact;
+        let head = if compact {
+            let order = |indices: &[usize]| spatial_order(&indices.iter().map(|&i| spec.coords[i]).collect::<Vec<_>>());
+            let (row_order, col_order) = (order(&spec.sources), order(&spec.destinations));
+            spec.sources = row_order.iter().map(|&k| spec.sources[k as usize]).collect();
+            spec.destinations = col_order.iter().map(|&k| spec.destinations[k as usize]).collect();
+            compact_header(&row_order, &col_order)
+        } else {
+            binary_header(rows as u32, cols as u32).to_vec()
+        };
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
         let (body_tx, body_rx) = mpsc::unbounded_channel::<Result<Bytes, std::io::Error>>();
         let engine = Arc::clone(self);
@@ -189,15 +200,21 @@ impl Engine {
             let started = Instant::now();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let job = engine.prepare(&spec);
-                if ready_tx.send(()).is_err() || body_tx.send(Ok(Bytes::copy_from_slice(&binary_header(rows as u32, cols as u32)))).is_err() {
+                if ready_tx.send(()).is_err() || body_tx.send(Ok(Bytes::from(head))).is_err() {
                     return;
                 }
                 let rows_per_block = (engine.block_bytes / (8 * cols)).max(1);
+                let (rows_per_block, mut encoder) =
+                    if compact { (rows_per_block.next_multiple_of(FRAME_ROWS), Some(CompactEncoder::new(cols))) } else { (rows_per_block, None) };
                 for start in (0..rows).step_by(rows_per_block) {
                     let end = (start + rows_per_block).min(rows);
                     let mut block = vec![0u32; (end - start) * 2 * cols];
                     job.compute_rows(start..end, &mut block);
-                    if body_tx.send(Ok(Bytes::from_owner(WordBlock(block)))).is_err() {
+                    let chunk = match &mut encoder {
+                        Some(encoder) => Bytes::from(encoder.encode(&block)),
+                        None => Bytes::from_owner(WordBlock(block)),
+                    };
+                    if body_tx.send(Ok(chunk)).is_err() {
                         return;
                     }
                 }
@@ -215,8 +232,12 @@ impl Engine {
         });
         let mut response = Response::new(Body::from_stream(body));
         let headers = response.headers_mut();
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(BINARY_CONTENT_TYPE));
-        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary_len(rows, cols)));
+        if compact {
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(COMPACT_CONTENT_TYPE));
+        } else {
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(BINARY_CONTENT_TYPE));
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary_len(rows, cols)));
+        }
         headers.insert("server-timing", server_timing(&[("queue", waited)]));
         Ok(response)
     }

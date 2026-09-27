@@ -1,3 +1,4 @@
+pub mod compact;
 pub mod geo;
 pub mod matrix;
 pub mod network;

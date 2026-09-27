@@ -5,67 +5,131 @@ import json
 import math
 import random
 import statistics
+import struct
 import time
 import urllib.parse
 
-BINARY = "application/vnd.distance-matrix.v1"
+ACCEPT = {"binary": "application/vnd.distance-matrix.v1", "compact": "application/vnd.distance-matrix.compact.v1", "json": "application/json"}
 NO_ROUTE = 0xFFFFFFFF
 
 
-def random_points(center: tuple[float, float], radius_km: float, count: int, rng: random.Random) -> list[dict[str, float]]:
+def around(center: tuple[float, float], radius_km: float, count: int, rng: random.Random) -> list[tuple[float, float]]:
     lat, lon = center
     points = []
     for _ in range(count):
         r = radius_km * math.sqrt(rng.random())
         angle = rng.uniform(0, 2 * math.pi)
-        points.append({"lat": lat + r * math.cos(angle) / 111.32, "lon": lon + r * math.sin(angle) / (111.32 * math.cos(math.radians(lat)))})
+        points.append((lat + r * math.cos(angle) / 111.32, lon + r * math.sin(angle) / (111.32 * math.cos(math.radians(lat)))))
     return points
 
 
-def fetch(connection: http.client.HTTPConnection, body: bytes, binary: bool) -> tuple[float, bytes]:
-    started = time.perf_counter()
-    connection.request("POST", "/matrix", body, {"Content-Type": "application/json", "Accept": BINARY if binary else "application/json"})
+def on_globe(count: int, rng: random.Random) -> list[tuple[float, float]]:
+    return [(math.degrees(math.asin(2 * rng.random() - 1)), 360 * rng.random() - 180) for _ in range(count)]
+
+
+def body(points: list[tuple[float, float]], **extra) -> bytes:
+    return json.dumps({"coordinates": [{"lat": lat, "lon": lon} for lat, lon in points], **extra}).encode()
+
+
+def post(connection: http.client.HTTPConnection, payload: bytes, format: str) -> http.client.HTTPResponse:
+    connection.request("POST", "/matrix", payload, {"Content-Type": "application/json", "Accept": ACCEPT[format]})
     response = connection.getresponse()
-    payload = response.read()
     if response.status != 200:
-        raise SystemExit(f"HTTP {response.status}: {payload[:300].decode(errors='replace')}")
-    if binary:
-        memoryview(payload)[16:].cast("I")
+        raise SystemExit(f"HTTP {response.status}: {response.read()[:300].decode(errors='replace')}")
+    return response
+
+
+def near_roads(connection: http.client.HTTPConnection, count: int, rng: random.Random) -> tuple[list[tuple[float, float]], int]:
+    found, tried = [], 0
+    while len(found) < count:
+        batch = on_globe(250, rng)
+        tried += len(batch)
+        pairs = [point for lat, lon in batch for point in ((lat, lon), (lat + 1e-6, lon))]
+        data = post(connection, body(pairs, sources=list(range(0, 500, 2)), destinations=list(range(1, 500, 2))), "binary").read()
+        distances = memoryview(data)[16:].cast("I")
+        found += [point for k, point in enumerate(batch) if distances[k * 500 + k] != NO_ROUTE]
+    return found[:count], tried
+
+
+def decode_compact(response: http.client.HTTPResponse):
+    import numpy as np
+    from compression import zstd
+
+    _, rows, cols, frames = struct.unpack("<4sIII", response.read(16))
+    row_order = np.frombuffer(response.read(4 * rows), "<u4")
+    col_order = np.frombuffer(response.read(4 * cols), "<u4")
+    received = 16 + 4 * (rows + cols)
+    encoded = np.empty((2, rows, cols), np.int64)
+    no_route = np.empty((rows, cols), bool)
+    previous = np.zeros((2, 1, cols), np.int64)
+    first = 0
+    for _ in range(frames):
+        height, size = struct.unpack("<II", response.read(8))
+        cells = height * cols
+        payload = zstd.decompress(response.read(size))
+        received += 8 + size
+        planes = np.frombuffer(payload, np.uint8, 8 * cells).reshape(2, 4, cells)
+        zigzag = np.ascontiguousarray(planes.transpose(0, 2, 1)).view("<u4").reshape(2, height, cols).astype(np.int64)
+        block = previous + np.cumsum(np.cumsum((zigzag >> 1) ^ -(zigzag & 1), axis=2), axis=1)
+        previous = block[:, -1:, :]
+        encoded[:, first : first + height] = block
+        no_route[first : first + height] = np.unpackbits(np.frombuffer(payload, np.uint8, offset=8 * cells), count=cells, bitorder="little").reshape(height, cols)
+        first += height
+    encoded[:, no_route] = NO_ROUTE
+    matrix = np.empty((2, rows, cols), np.uint32)
+    matrix[:, row_order[:, None], col_order[None, :]] = encoded
+    return matrix[0], matrix[1], received
+
+
+def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -> tuple[float, int, int]:
+    started = time.perf_counter()
+    response = post(connection, payload, format)
+    if format == "compact":
+        distances, _, size = decode_compact(response)
+        unreachable = int((distances == NO_ROUTE).sum())
+    elif format == "binary":
+        data = response.read()
+        size = len(data)
+        unreachable = memoryview(data)[16:].cast("I").tolist().count(NO_ROUTE) // 2
     else:
-        json.loads(payload)
-    return (time.perf_counter() - started) * 1000, payload
-
-
-def cells_without_route(payload: bytes, binary: bool) -> int:
-    if binary:
-        return memoryview(payload)[16:].cast("I").tolist().count(NO_ROUTE) // 2
-    return sum(row.count(None) for row in json.loads(payload)["times"])
+        data = response.read()
+        size = len(data)
+        unreachable = sum(row.count(None) for row in json.loads(data)["times"])
+    return (time.perf_counter() - started) * 1000, size, unreachable
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Request square distance matrices and report client-side time-to-last-byte.")
-    parser.add_argument("--url", default="http://100.57.61.188:8080")
+    parser = argparse.ArgumentParser(description="Request square distance matrices and report client-side time to last byte, decoding included.")
+    parser.add_argument("--url", default="http://3.65.232.220:8080")
     parser.add_argument("--center", default="53.55,10.0", help="lat,lon around which random points are drawn (default: Hamburg)")
     parser.add_argument("--radius-km", type=float, default=25.0)
+    parser.add_argument("--world", action="store_true", help="draw points uniformly over the whole globe instead")
+    parser.add_argument("--on-roads", action="store_true", help="with --world, draw from a pool of points within 5 km of a road")
     parser.add_argument("--points", type=int, default=1000)
     parser.add_argument("--requests", type=int, default=30)
-    parser.add_argument("--format", choices=["binary", "json"], default="binary")
+    parser.add_argument("--format", choices=list(ACCEPT), default="binary")
     args = parser.parse_args()
     url = urllib.parse.urlsplit(args.url)
-    center = tuple(float(part) for part in args.center.split(","))
-    binary = args.format == "binary"
+    connection = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=120)
     rng = random.Random(1)
-    connection = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=60)
-    bodies = [json.dumps({"coordinates": random_points(center, args.radius_km, args.points, rng)}).encode() for _ in range(args.requests + 3)]
-    for body in bodies[:3]:
-        fetch(connection, body, binary)
-    results = [fetch(connection, body, binary) for body in bodies[3:]]
-    latencies = sorted(elapsed for elapsed, _ in results)
+    if args.world and args.on_roads:
+        pool, tried = near_roads(connection, 2 * args.points, rng)
+        print(f"sampled the globe uniformly: {100 * len(pool) / tried:.0f}% of points lie within 5 km of a road")
+        batches = [rng.sample(pool, args.points) for _ in range(args.requests + 3)]
+    elif args.world:
+        batches = [on_globe(args.points, rng) for _ in range(args.requests + 3)]
+    else:
+        center = tuple(float(part) for part in args.center.split(","))
+        batches = [around(center, args.radius_km, args.points, rng) for _ in range(args.requests + 3)]
+    payloads = [body(points) for points in batches]
+    for payload in payloads[:3]:
+        fetch(connection, payload, args.format)
+    results = [fetch(connection, payload, args.format) for payload in payloads[3:]]
+    latencies = sorted(result[0] for result in results)
     percentile = lambda q: latencies[min(len(latencies) - 1, round(q * (len(latencies) - 1)))]
-    last = results[-1][1]
-    print(f"{args.points} x {args.points} {args.format}, {len(results)} requests, response {len(last) / 1e6:.1f} MB")
+    print(f"{args.points} x {args.points} {args.format}, {len(results)} requests on one connection, response {results[-1][1] / 1e6:.2f} MB")
     print(f"time to last byte incl. decoding: p50 {percentile(0.5):.1f} ms, p90 {percentile(0.9):.1f} ms, p99 {percentile(0.99):.1f} ms, max {latencies[-1]:.1f} ms")
-    print(f"mean {statistics.fmean(latencies):.1f} ms; cells without a route in the last response: {cells_without_route(last, binary)}")
+    print(f"mean {statistics.fmean(latencies):.1f} ms; cells without a route in the last response: {results[-1][2]:,} of {args.points ** 2:,}")
 
 
 if __name__ == "__main__":

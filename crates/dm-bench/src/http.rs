@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Context, Result};
+use dm_core::compact::{decode_compact, COMPACT_CONTENT_TYPE};
 use dm_core::geo::Coord;
 use dm_core::wire::{decode_binary, BINARY_CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum WireFormat {
     Binary,
+    Compact,
     Json,
 }
 
@@ -58,6 +60,7 @@ pub fn request_body(coords: &[Coord], shape: Shape) -> String {
 pub async fn measure(client: &reqwest::Client, url: &str, format: WireFormat, body: String, size: usize, cells: usize) -> Result<Sample> {
     let accept = match format {
         WireFormat::Binary => BINARY_CONTENT_TYPE,
+        WireFormat::Compact => COMPACT_CONTENT_TYPE,
         WireFormat::Json => "application/json",
     };
     let started = Instant::now();
@@ -67,8 +70,8 @@ pub async fn measure(client: &reqwest::Client, url: &str, format: WireFormat, bo
     let bytes = response.bytes().await?;
     let ttlb = started.elapsed();
     let decoded_cells = match format {
-        WireFormat::Binary => {
-            let matrix = decode_binary(&bytes)?;
+        WireFormat::Binary | WireFormat::Compact => {
+            let matrix = if format == WireFormat::Binary { decode_binary(&bytes)? } else { decode_compact(&bytes)? };
             matrix.distances.len() + matrix.durations.len()
         }
         WireFormat::Json => {

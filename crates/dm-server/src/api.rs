@@ -1,5 +1,6 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use dm_core::compact::COMPACT_CONTENT_TYPE;
 use dm_core::geo::Coord;
 use dm_core::wire::BINARY_CONTENT_TYPE;
 use serde::Deserialize;
@@ -29,6 +30,7 @@ pub struct Limits {
 pub enum Format {
     Json,
     Binary,
+    Compact,
 }
 
 impl Format {
@@ -36,6 +38,7 @@ impl Format {
         match self {
             Format::Json => "json",
             Format::Binary => "binary",
+            Format::Compact => "compact",
         }
     }
 }
@@ -57,7 +60,7 @@ impl MatrixSpec {
 pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
-    #[error("the Accept header must allow application/json or {BINARY_CONTENT_TYPE}")]
+    #[error("the Accept header must allow application/json, {BINARY_CONTENT_TYPE} or {COMPACT_CONTENT_TYPE}")]
     NotAcceptable,
     #[error("{0}")]
     TooLarge(String),
@@ -94,7 +97,9 @@ pub fn negotiate(headers: &HeaderMap) -> Result<Format, ApiError> {
     let Some(accept) = headers.get(header::ACCEPT) else { return Ok(Format::Json) };
     let accept = accept.to_str().map_err(|_| ApiError::NotAcceptable)?;
     let media_types: Vec<&str> = accept.split(',').map(|part| part.split(';').next().unwrap_or("").trim()).collect();
-    if media_types.contains(&BINARY_CONTENT_TYPE) {
+    if media_types.contains(&COMPACT_CONTENT_TYPE) {
+        Ok(Format::Compact)
+    } else if media_types.contains(&BINARY_CONTENT_TYPE) {
         Ok(Format::Binary)
     } else if media_types.iter().any(|m| matches!(*m, "application/json" | "application/*" | "*/*")) {
         Ok(Format::Json)
@@ -140,7 +145,7 @@ impl MatrixRequest {
             MatrixSpec { coords, sources: indices("sources", self.sources, count)?, destinations: indices("destinations", self.destinations, count)?, format };
         let limit = match format {
             Format::Json => limits.max_json_cells,
-            Format::Binary => limits.max_cells,
+            Format::Binary | Format::Compact => limits.max_cells,
         };
         if spec.cells() > limit {
             let hint = if format == Format::Json { format!("; request {BINARY_CONTENT_TYPE} for larger matrices") } else { String::new() };
@@ -192,6 +197,8 @@ mod tests {
         assert_eq!(negotiate(&headers).unwrap(), Format::Json);
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/vnd.distance-matrix.v1, application/json;q=0.5"));
         assert_eq!(negotiate(&headers).unwrap(), Format::Binary);
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/vnd.distance-matrix.compact.v1"));
+        assert_eq!(negotiate(&headers).unwrap(), Format::Compact);
         headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
         assert_eq!(negotiate(&headers).unwrap(), Format::Json);
         headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
