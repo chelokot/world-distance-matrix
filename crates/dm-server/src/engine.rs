@@ -72,6 +72,12 @@ impl Drop for Reservation {
 struct Admitted {
     reservation: Reservation,
     turn: OwnedSemaphorePermit,
+    waited: Duration,
+}
+
+fn server_timing(entries: &[(&str, Duration)]) -> HeaderValue {
+    let value = entries.iter().map(|(name, duration)| format!("{name};dur={:.1}", duration.as_secs_f64() * 1e3)).collect::<Vec<_>>().join(", ");
+    HeaderValue::from_str(&value).expect("server timing is plain ASCII")
 }
 
 struct WordBlock(Vec<u32>);
@@ -132,11 +138,12 @@ impl Engine {
         .await;
         self.queued.fetch_sub(1, Ordering::AcqRel);
         self.metrics.queued_requests.dec();
-        self.metrics.admission_wait_seconds.with_label_values(&[size_class(cells)]).observe(started.elapsed().as_secs_f64());
+        let waited = started.elapsed();
+        self.metrics.admission_wait_seconds.with_label_values(&[size_class(cells)]).observe(waited.as_secs_f64());
         let (capacity, turn) = acquired?;
         self.metrics.cells_in_flight.add(cells as i64);
         let reservation = Reservation { _permit: capacity, cells: cells as i64, metrics: Arc::clone(&self.metrics) };
-        Ok(Admitted { reservation, turn })
+        Ok(Admitted { reservation, turn, waited })
     }
 
     fn prepare(&self, spec: &MatrixSpec) -> MatrixJob<'_> {
@@ -177,7 +184,7 @@ impl Engine {
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
         let (body_tx, body_rx) = mpsc::unbounded_channel::<Result<Bytes, std::io::Error>>();
         let engine = Arc::clone(self);
-        let Admitted { reservation, turn } = admitted;
+        let Admitted { reservation, turn, waited } = admitted;
         self.lane(spec.cells()).pool.spawn(move || {
             let started = Instant::now();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -210,12 +217,14 @@ impl Engine {
         let headers = response.headers_mut();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(BINARY_CONTENT_TYPE));
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary_len(rows, cols)));
+        headers.insert("server-timing", server_timing(&[("queue", waited)]));
         Ok(response)
     }
 
     async fn json(self: &Arc<Self>, spec: MatrixSpec, admitted: Admitted) -> Result<Response, ApiError> {
-        let (tx, rx) = oneshot::channel::<Bytes>();
+        let (tx, rx) = oneshot::channel::<(Bytes, Duration)>();
         let engine = Arc::clone(self);
+        let waited = admitted.waited;
         self.lane(spec.cells()).pool.spawn(move || {
             let started = Instant::now();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -223,14 +232,16 @@ impl Engine {
                 let job = engine.prepare(&spec);
                 let mut values = vec![0u32; rows * 2 * cols];
                 job.compute_rows(0..rows, &mut values);
-                let _ = tx.send(Bytes::from(encode_json(&values, rows, cols)));
+                let _ = tx.send((Bytes::from(encode_json(&values, rows, cols)), started.elapsed()));
             }));
             engine.finish(&spec, started, outcome);
             drop(admitted);
         });
-        let body = rx.await.map_err(|_| ApiError::Internal)?;
+        let (body, computed) = rx.await.map_err(|_| ApiError::Internal)?;
         let mut response = Response::new(Body::from(body));
-        response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert("server-timing", server_timing(&[("queue", waited), ("compute", computed)]));
         Ok(response)
     }
 }

@@ -68,6 +68,11 @@ computed, with an exact `Content-Length`; a truncated body means the request fai
 * Values are free-flow estimates from OpenStreetMap speed limits and road classes; they contain no live or historical
   traffic.
 
+Every matrix response carries a `Server-Timing` header with the time the request waited for capacity and, for JSON,
+the server's compute time including encoding: `server-timing: queue;dur=0.1, compute;dur=25.4` (milliseconds). Binary
+responses carry only `queue`, because their rows are sent while later rows are still being computed. To see it next to
+the client's own time: `curl -s -o out.json -w '%header{server-timing} | total %{time_total}s\n' ...`.
+
 **Errors** are JSON `{"error": "..."}`: `400` malformed request, `406` unsupported `Accept`, `413` too many
 locations/cells (limits below), `503` at capacity (with `Retry-After`; retry with back-off).
 

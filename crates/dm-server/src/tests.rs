@@ -101,6 +101,10 @@ async fn json_matrix_has_the_specified_shape() {
     let (status, headers, body) = call(app(), "POST", "/matrix", body_for(&points, json!({})), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+    let timing = headers["server-timing"].to_str().unwrap();
+    let durations: Vec<(&str, f64)> =
+        timing.split(", ").map(|entry| entry.split_once(";dur=").map(|(name, ms)| (name, ms.parse().unwrap())).expect("name;dur=ms")).collect();
+    assert!(matches!(durations[..], [("queue", queue), ("compute", compute)] if queue >= 0.0 && compute > 0.0), "{timing}");
     let (distances, times) = json_matrix(&body);
     for i in 0..3 {
         assert_eq!(distances[i][i], Some(0));
@@ -119,6 +123,7 @@ async fn binary_and_json_agree_and_reflect_one_way_streets() {
     let (status, headers, binary) = call(app(), "POST", "/matrix", body_for(&points, json!({})), Some(BINARY_CONTENT_TYPE)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], BINARY_CONTENT_TYPE);
+    assert!(headers["server-timing"].to_str().unwrap().starts_with("queue;dur="));
     assert_eq!(headers[header::CONTENT_LENGTH].to_str().unwrap().parse::<usize>().unwrap(), binary.len());
     let decoded = decode_binary(&binary).unwrap();
     assert_eq!((decoded.rows, decoded.cols), (60, 60));

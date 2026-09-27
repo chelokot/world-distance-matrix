@@ -453,7 +453,8 @@ production should run two hosts behind a load balancer and update them one at a 
 | corrupted or incompatible dataset | refused at startup (manifest version, array sizes, sorted/grouped invariants) |
 | SIGTERM | stops accepting, drains in-flight requests, exits |
 
-**Observability.** Structured JSON logs (one line per computed matrix with size, format and compute time; one per
+**Observability.** Every matrix response carries a `Server-Timing` header (queue wait; for JSON also compute time).
+Structured JSON logs (one line per computed matrix with size, format and compute time; one per
 rejection with reason). Prometheus metrics: request counts by status and format, compute-time and queue-wait
 histograms by size class, cells in flight, queued requests, unsnapped points, loaded dataset. Suggested alerts: p99
 `dm_compute_seconds` for the 1,000² class above 50 ms, any `503`, `dm_unsnapped_points_total` rate jumps (a customer's
