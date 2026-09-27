@@ -41,9 +41,15 @@ pub fn write(output: &Path, source: String, profile: &str, built: &Built, params
         let c = &topology.chains[chain];
         components.is_major(c.tail, params.major_component_min_nodes) && components.is_major(c.head, params.major_component_min_nodes)
     };
+    let group = |chain: usize| match (topology.chain_snappable[chain], is_major(chain)) {
+        (true, true) => 0,
+        (true, false) => 1,
+        (false, _) => 2,
+    };
     let mut chain_order: Vec<u32> = (0..topology.chains.len() as u32).collect();
-    chain_order.par_sort_by_cached_key(|&chain| (!is_major(chain as usize), hilbert_index(boxes[chain as usize].center())));
-    let major_chain_count = chain_order.iter().take_while(|&&chain| is_major(chain as usize)).count();
+    chain_order.par_sort_by_cached_key(|&chain| (group(chain as usize), hilbert_index(boxes[chain as usize].center())));
+    let major_chain_count = chain_order.iter().take_while(|&&chain| group(chain as usize) == 0).count();
+    let snappable_chain_count = chain_order.iter().take_while(|&&chain| group(chain as usize) < 2).count();
 
     let chain_tail: Vec<u32> = chain_order.iter().map(|&c| rank[topology.chains[c as usize].tail as usize]).collect();
     let chain_head: Vec<u32> = chain_order.iter().map(|&c| rank[topology.chains[c as usize].head as usize]).collect();
@@ -59,7 +65,7 @@ pub fn write(output: &Path, source: String, profile: &str, built: &Built, params
     let geometry_first: Vec<u32> = geometry_first.into_iter().map(|offset| offset as u32).collect();
     let ordered_boxes: Vec<BBox> = chain_order.iter().map(|&c| boxes[c as usize]).collect();
     let major_index = build_levels(&ordered_boxes[..major_chain_count]);
-    let minor_index = build_levels(&ordered_boxes[major_chain_count..]);
+    let minor_index = build_levels(&ordered_boxes[major_chain_count..snappable_chain_count]);
     let mut new_chain = vec![0u32; chain_order.len()];
     for (position, &chain) in chain_order.iter().enumerate() {
         new_chain[chain as usize] = position as u32;
@@ -99,6 +105,7 @@ pub fn write(output: &Path, source: String, profile: &str, built: &Built, params
         ch_arc_count: hierarchy.arcs.len() as u64,
         chain_count: chain_order.len() as u32,
         major_chain_count: major_chain_count as u32,
+        snappable_chain_count: snappable_chain_count as u32,
         geometry_point_count: geometry.len() as u64,
         arrays: Vec::new(),
     })

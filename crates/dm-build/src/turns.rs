@@ -123,6 +123,7 @@ mod tests {
                 Chain { tail: 0, head: 4, cost: ChainCost { dist_dm: 100, forward_time_ms: 1000, backward_time_ms: NOT_TRAVERSABLE } },
             ],
             chain_way: vec![10, 20, 30, 40],
+            chain_snappable: vec![true; 4],
             interior_first: vec![0; 5],
             interior: Vec::new(),
             restrictions: vec![GraphRestriction { rule, from: vec![10], via: 0, to: vec![20] }],

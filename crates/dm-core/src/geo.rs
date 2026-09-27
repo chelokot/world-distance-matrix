@@ -3,6 +3,7 @@ use bytemuck::{Pod, Zeroable};
 pub const COORD_SCALE: f64 = 1e7;
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 const METRES_PER_DEGREE: f64 = EARTH_RADIUS_M * std::f64::consts::PI / 180.0;
+const FULL_TURN: i64 = 3_600_000_000;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Pod, Zeroable)]
@@ -13,7 +14,8 @@ pub struct Coord {
 
 impl Coord {
     pub fn from_degrees(lat: f64, lon: f64) -> Self {
-        Self { lat: (lat * COORD_SCALE).round() as i32, lon: (lon * COORD_SCALE).round() as i32 }
+        let lon = ((lon * COORD_SCALE).round() as i64 + FULL_TURN / 2).rem_euclid(FULL_TURN) - FULL_TURN / 2;
+        Self { lat: (lat * COORD_SCALE).round() as i32, lon: lon as i32 }
     }
 
     pub fn lat_degrees(self) -> f64 {
@@ -52,20 +54,23 @@ impl LocalFrame {
         Self { origin, metres_per_lon_unit: METRES_PER_UNIT * origin.lat_degrees().to_radians().cos() }
     }
 
+    fn lon_offset(&self, lon: i32) -> i64 {
+        (lon as i64 - self.origin.lon as i64 + FULL_TURN / 2).rem_euclid(FULL_TURN) - FULL_TURN / 2
+    }
+
     pub fn project(&self, coord: Coord) -> Point {
-        let mut dlon = coord.lon as i64 - self.origin.lon as i64;
-        let full_turn = (360.0 * COORD_SCALE) as i64;
-        if dlon > full_turn / 2 {
-            dlon -= full_turn;
-        } else if dlon < -full_turn / 2 {
-            dlon += full_turn;
-        }
-        Point { x: dlon as f64 * self.metres_per_lon_unit, y: (coord.lat as i64 - self.origin.lat as i64) as f64 * METRES_PER_UNIT }
+        Point { x: self.lon_offset(coord.lon) as f64 * self.metres_per_lon_unit, y: (coord.lat as i64 - self.origin.lat as i64) as f64 * METRES_PER_UNIT }
     }
 
     pub fn distance_to_box_m(&self, min: Coord, max: Coord) -> f64 {
-        let clamped = Coord { lat: self.origin.lat.clamp(min.lat, max.lat), lon: self.origin.lon.clamp(min.lon, max.lon) };
-        let p = self.project(clamped);
+        let lon = if (min.lon..=max.lon).contains(&self.origin.lon) {
+            self.origin.lon
+        } else if self.lon_offset(min.lon).abs() <= self.lon_offset(max.lon).abs() {
+            min.lon
+        } else {
+            max.lon
+        };
+        let p = self.project(Coord { lat: self.origin.lat.clamp(min.lat, max.lat), lon });
         p.x.hypot(p.y)
     }
 }
@@ -133,6 +138,9 @@ mod tests {
         let frame = LocalFrame::new(Coord::from_degrees(-17.0, 179.999));
         let p = frame.project(Coord::from_degrees(-17.0, -179.999));
         assert!(p.x > 0.0 && p.x < 300.0, "{}", p.x);
+        assert_eq!(Coord::from_degrees(-17.0, 180.0), Coord::from_degrees(-17.0, -180.0));
+        let box_across = frame.distance_to_box_m(Coord::from_degrees(-17.1, -179.99), Coord::from_degrees(-16.9, -179.5));
+        assert!(box_across < 1_200.0, "{box_across}");
     }
 
     #[test]

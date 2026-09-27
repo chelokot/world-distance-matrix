@@ -9,7 +9,7 @@ use bytemuck::Pod;
 use memmap2::{Mmap, MmapOptions};
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -21,6 +21,7 @@ pub struct Manifest {
     pub ch_arc_count: u64,
     pub chain_count: u32,
     pub major_chain_count: u32,
+    pub snappable_chain_count: u32,
     pub geometry_point_count: u64,
     pub arrays: Vec<ArrayEntry>,
 }

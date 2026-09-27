@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -215,6 +216,18 @@ fn read_nodes(path: &Path, ids: &[i64]) -> Result<Nodes> {
     Ok(nodes.into_inner().expect("node table lock"))
 }
 
+const ANTIMERIDIAN: i32 = 1_800_000_000;
+
+fn join_across_antimeridian(refs: &mut [u32], restrictions: &mut [Restriction], coords: &[Coord]) {
+    let west: HashMap<i32, u32> = coords.iter().enumerate().filter(|(_, c)| c.lon == -ANTIMERIDIAN).map(|(node, c)| (c.lat, node as u32)).collect();
+    let joined = |node: u32| {
+        let coord = coords[node as usize];
+        west.get(&coord.lat).copied().filter(|_| coord.lon == ANTIMERIDIAN).unwrap_or(node)
+    };
+    refs.par_iter_mut().for_each(|node| *node = joined(*node));
+    restrictions.iter_mut().for_each(|restriction| restriction.via = joined(restriction.via));
+}
+
 pub fn read(path: &Path) -> Result<OsmExtract> {
     let replication_timestamp = replication_timestamp(path)?;
     let started = std::time::Instant::now();
@@ -229,12 +242,29 @@ pub fn read(path: &Path) -> Result<OsmExtract> {
     let mut ids = raw.refs.clone();
     ids.par_sort_unstable();
     ids.dedup();
-    let refs: Vec<u32> = raw.refs.par_iter().map(|id| ids.binary_search(id).expect("every ref is in the id set") as u32).collect();
-    let restrictions = resolve_restrictions(raw.restrictions, &raw.ids, &ids);
+    let mut refs: Vec<u32> = raw.refs.par_iter().map(|id| ids.binary_search(id).expect("every ref is in the id set") as u32).collect();
+    let mut restrictions = resolve_restrictions(raw.restrictions, &raw.ids, &ids);
     drop(raw.refs);
     let started = std::time::Instant::now();
     let nodes = read_nodes(path, &ids)?;
+    join_across_antimeridian(&mut refs, &mut restrictions, &nodes.coords);
     let present = nodes.flags.par_iter().filter(|&&f| f & NODE_PRESENT != 0).count();
     tracing::info!(referenced = ids.len(), present, restrictions = restrictions.len(), elapsed_s = started.elapsed().as_secs_f32(), "read referenced nodes");
     Ok(OsmExtract { ways: Ways { profiles: raw.profiles, first_ref: raw.first_ref, refs }, nodes, restrictions, replication_timestamp })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roads_split_at_the_antimeridian_meet_again() {
+        let coords = [(-16.793516, 180.0), (-16.793516, -180.0), (-16.79, 179.99), (-16.8, 180.0), (-16.79, -179.99)]
+            .map(|(lat, lon)| Coord { lat: (lat * 1e7_f64).round() as i32, lon: (lon * 1e7_f64).round() as i32 });
+        let mut refs = vec![2, 0, 1, 4, 3];
+        let mut restrictions = vec![Restriction { rule: TurnRule::Forbid, from: vec![0], via: 0, to: vec![1] }];
+        join_across_antimeridian(&mut refs, &mut restrictions, &coords);
+        assert_eq!(refs, vec![2, 1, 1, 4, 3]);
+        assert_eq!(restrictions[0].via, 1);
+    }
 }

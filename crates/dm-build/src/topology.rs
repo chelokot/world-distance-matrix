@@ -23,6 +23,7 @@ pub struct Topology {
     pub node_coords: Vec<Coord>,
     pub chains: Vec<Chain>,
     pub chain_way: Vec<u32>,
+    pub chain_snappable: Vec<bool>,
     pub interior_first: Vec<u64>,
     pub interior: Vec<Coord>,
     pub restrictions: Vec<GraphRestriction>,
@@ -288,6 +289,7 @@ pub fn build(extract: &OsmExtract) -> Topology {
         node_coords,
         chains: Vec::with_capacity(chain_count),
         chain_way: Vec::with_capacity(chain_count),
+        chain_snappable: Vec::with_capacity(chain_count),
         interior_first: Vec::with_capacity(chain_count + 1),
         interior: Vec::with_capacity(interior_count),
         restrictions,
@@ -304,6 +306,7 @@ pub fn build(extract: &OsmExtract) -> Topology {
         for (tail, head, cost, interior_len, way) in chunk.chains {
             topology.chains.push(Chain { tail: resolve(tail), head: resolve(head), cost });
             topology.chain_way.push(way);
+            topology.chain_snappable.push(extract.ways.profiles[way as usize].snappable);
             topology.interior_first.push(topology.interior_first.last().expect("starts with zero") + interior_len as u64);
         }
     }

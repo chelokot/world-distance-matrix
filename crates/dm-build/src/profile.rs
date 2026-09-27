@@ -1,14 +1,16 @@
-pub const PROFILE_NAME: &str = "car-v2";
+pub const PROFILE_NAME: &str = "car-v3";
 pub const TRAFFIC_SIGNAL_PENALTY_MS: u32 = 2_000;
 const MAXSPEED_FACTOR: f64 = 0.8;
 const UNPAVED_SPEED_CAP_KMH: f64 = 30.0;
 const FERRY_DEFAULT_SPEED_KMH: f64 = 20.0;
+const FERRY_MAX_SPEED_KMH: f64 = 80.0;
+const CAR_TRAIN_MAX_SPEED_KMH: f64 = 200.0;
 const MPH: f64 = 1.609344;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pace {
     Speed { forward_kmh: f64, backward_kmh: f64 },
-    FixedDuration { seconds: f64 },
+    FixedDuration { seconds: f64, seconds_if_hours: Option<f64>, max_kmh: f64 },
     DefaultFerry,
 }
 
@@ -17,15 +19,17 @@ pub struct WayProfile {
     pub forward: bool,
     pub backward: bool,
     pub pace: Pace,
+    pub snappable: bool,
 }
 
 impl WayProfile {
     pub fn speeds_kmh(&self, way_length_m: f64) -> (f64, f64) {
         match self.pace {
             Pace::Speed { forward_kmh, backward_kmh } => (forward_kmh, backward_kmh),
-            Pace::FixedDuration { seconds } => {
-                let kmh = (way_length_m / 1000.0) / (seconds / 3600.0);
-                (kmh, kmh)
+            Pace::FixedDuration { seconds, seconds_if_hours, max_kmh } => {
+                let kmh = |seconds: f64| (way_length_m / 1000.0) / (seconds / 3600.0);
+                let speed = [Some(seconds), seconds_if_hours].into_iter().flatten().map(kmh).find(|&speed| speed <= max_kmh).unwrap_or(FERRY_DEFAULT_SPEED_KMH);
+                (speed, speed)
             }
             Pace::DefaultFerry => (FERRY_DEFAULT_SPEED_KMH, FERRY_DEFAULT_SPEED_KMH),
         }
@@ -92,6 +96,8 @@ pub struct Tags<'a> {
     area: Option<&'a str>,
     impassable: Option<&'a str>,
     surface: Option<&'a str>,
+    motorroad: Option<&'a str>,
+    tunnel: Option<&'a str>,
     barrier: Option<&'a str>,
     relation_type: Option<&'a str>,
     restriction: Option<&'a str>,
@@ -122,6 +128,8 @@ impl<'a> Tags<'a> {
                 "area" => &mut collected.area,
                 "impassable" => &mut collected.impassable,
                 "surface" => &mut collected.surface,
+                "motorroad" => &mut collected.motorroad,
+                "tunnel" => &mut collected.tunnel,
                 "barrier" => &mut collected.barrier,
                 "type" => &mut collected.relation_type,
                 "restriction" => &mut collected.restriction,
@@ -242,13 +250,15 @@ pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
         if tags.route == Some("ferry") && !explicitly_allowed || tags.car_access() == Access::Denied {
             return None;
         }
+        let max_kmh = if tags.route == Some("ferry") { FERRY_MAX_SPEED_KMH } else { CAR_TRAIN_MAX_SPEED_KMH };
+        let seconds_if_hours = tags.duration.and_then(|value| value.trim().parse::<f64>().ok()).map(|hours| hours * 3600.0);
         let pace = match (tags.duration.and_then(parse_duration_seconds), tags.maxspeed.and_then(parse_maxspeed)) {
-            (Some(seconds), _) => Pace::FixedDuration { seconds },
+            (Some(seconds), _) => Pace::FixedDuration { seconds, seconds_if_hours, max_kmh },
             (None, Some(kmh)) => Pace::Speed { forward_kmh: kmh, backward_kmh: kmh },
             (None, None) => Pace::DefaultFerry,
         };
         let (forward, backward) = directions(tags)?;
-        return Some(WayProfile { forward, backward, pace });
+        return Some(WayProfile { forward, backward, pace, snappable: false });
     }
     let highway = tags.highway?;
     let class_speed = default_speed_kmh(highway)?;
@@ -274,7 +284,9 @@ pub fn way_profile(tags: &Tags) -> Option<WayProfile> {
             speed
         }
     };
-    Some(WayProfile { forward, backward, pace: Pace::Speed { forward_kmh: speed_for(tags.maxspeed_forward), backward_kmh: speed_for(tags.maxspeed_backward) } })
+    let pace = Pace::Speed { forward_kmh: speed_for(tags.maxspeed_forward), backward_kmh: speed_for(tags.maxspeed_backward) };
+    let no_stopping = matches!(highway, "motorway" | "motorway_link" | "trunk_link") || tags.motorroad == Some("yes") || tags.tunnel == Some("yes");
+    Some(WayProfile { forward, backward, pace, snappable: !no_stopping })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,7 +412,8 @@ mod tests {
         assert!(profile(&[("route", "ferry")]).is_none());
         assert!(profile(&[("route", "ferry"), ("motor_vehicle", "no")]).is_none());
         let ferry = profile(&[("route", "ferry"), ("motorcar", "yes"), ("duration", "01:30")]).unwrap();
-        assert_eq!(ferry.pace, Pace::FixedDuration { seconds: 5400.0 });
+        assert_eq!(ferry.pace, Pace::FixedDuration { seconds: 5400.0, seconds_if_hours: None, max_kmh: FERRY_MAX_SPEED_KMH });
+        assert!(!ferry.snappable && profile(&[("highway", "residential")]).unwrap().snappable);
         assert!((forward_speed(ferry) - 1.0 / 1.5).abs() < 1e-9);
         let default_ferry = profile(&[("route", "ferry"), ("motor_vehicle", "yes")]).unwrap();
         assert_eq!(default_ferry.pace, Pace::DefaultFerry);
@@ -409,6 +422,30 @@ mod tests {
         let shuttle = profile(&[("route", "shuttle_train"), ("motorcar", "yes"), ("maxspeed", "100"), ("oneway", "yes")]).unwrap();
         assert_eq!((shuttle.pace, shuttle.backward), (Pace::Speed { forward_kmh: 100.0, backward_kmh: 100.0 }, false));
         assert!(profile(&[("route", "ferry"), ("foot", "yes"), ("vehicle", "no"), ("hgv", "yes")]).is_none());
+    }
+
+    #[test]
+    fn points_attach_only_to_roads_where_a_car_can_stop() {
+        let snappable = |tags: &[(&str, &str)]| profile(tags).unwrap().snappable;
+        assert!(snappable(&[("highway", "residential")]));
+        assert!(snappable(&[("highway", "trunk")]));
+        assert!(snappable(&[("highway", "service"), ("tunnel", "building_passage")]));
+        assert!(!snappable(&[("highway", "motorway")]));
+        assert!(!snappable(&[("highway", "motorway_link")]));
+        assert!(!snappable(&[("highway", "trunk_link")]));
+        assert!(!snappable(&[("highway", "trunk"), ("motorroad", "yes")]));
+        assert!(!snappable(&[("highway", "primary"), ("tunnel", "yes")]));
+    }
+
+    #[test]
+    fn ferry_durations_that_imply_impossible_speeds_are_reread_or_ignored() {
+        let speed = |tags: &[(&str, &str)], km: f64| profile(tags).unwrap().speeds_kmh(km * 1000.0).0;
+        let ferry = |duration| [("route", "ferry"), ("motor_vehicle", "yes"), ("duration", duration)];
+        assert!((speed(&ferry("13"), 351.0) - 27.0).abs() < 0.1);
+        assert!((speed(&ferry("13"), 3.0) - 13.8).abs() < 0.1);
+        assert_eq!(speed(&ferry("0:13"), 351.0), FERRY_DEFAULT_SPEED_KMH);
+        assert!((speed(&ferry("10:30"), 310.0) - 29.5).abs() < 0.1);
+        assert!((speed(&[("route", "shuttle_train"), ("duration", "35")], 50.0) - 85.7).abs() < 0.1);
     }
 
     #[test]

@@ -135,7 +135,11 @@ impl Network {
             turns: Turns { arrivals: reader.read("turn_arrivals")?, departures: reader.read("turn_departures")? },
             node_coords: reader.read("node_coords")?,
             major_index: PackedRtree::new(0, manifest.major_chain_count, reader.read::<BBox>("major_index")?),
-            minor_index: PackedRtree::new(manifest.major_chain_count, manifest.chain_count - manifest.major_chain_count, reader.read::<BBox>("minor_index")?),
+            minor_index: PackedRtree::new(
+                manifest.major_chain_count,
+                manifest.snappable_chain_count - manifest.major_chain_count,
+                reader.read::<BBox>("minor_index")?,
+            ),
             manifest,
         };
         network.validate()?;

@@ -11,7 +11,8 @@ mkdir -p /data
 aws s3 cp --no-sign-request --only-show-errors "s3://osm-pds/$latest" /data/planet.osm.pbf
 aws s3 cp --only-show-errors "s3://$BUCKET/releases/dm-build" /usr/local/bin/dm-build
 chmod +x /usr/local/bin/dm-build
-dm-build --input /data/planet.osm.pbf --output "/data/$version" 2>&1 | tee /var/log/dm-build.log
-aws s3 cp --only-show-errors --recursive "/data/$version" "s3://$BUCKET/datasets/$version"
-aws s3 cp --only-show-errors /var/log/dm-build.log "s3://$BUCKET/datasets/$version.build.log"
+dm-build --input /data/planet.osm.pbf --output /data/dataset 2>&1 | tee /var/log/dm-build.log
+name="$version-$(python3 -c 'import json, sys; m = json.load(open(sys.argv[1])); print(m["profile"] + "-f" + str(m["format_version"]))' /data/dataset/manifest.json)"
+aws s3 cp --only-show-errors --recursive /data/dataset "s3://$BUCKET/datasets/$name"
+aws s3 cp --only-show-errors /var/log/dm-build.log "s3://$BUCKET/datasets/$name.build.log"
 shutdown -h now

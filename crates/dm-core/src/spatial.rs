@@ -133,14 +133,20 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     #[test]
-    fn nearest_matches_brute_force() {
+    fn nearest_matches_brute_force_including_across_the_antimeridian() {
+        for (lat, lon) in [(54.0, 10.0), (-16.8, 180.0)] {
+            nearest_matches_brute_force_around(lat, lon);
+        }
+    }
+
+    fn nearest_matches_brute_force_around(lat: f64, lon: f64) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        let mut points: Vec<Coord> = (0..5000).map(|_| Coord::from_degrees(54.0 + rng.gen_range(-0.5..0.5), 10.0 + rng.gen_range(-0.8..0.8))).collect();
+        let mut points: Vec<Coord> = (0..5000).map(|_| Coord::from_degrees(lat + rng.gen_range(-0.5..0.5), lon + rng.gen_range(-0.8..0.8))).collect();
         points.sort_by_key(|&p| crate::geo::hilbert_index(p));
         let boxes: Vec<BBox> = points.iter().map(|&p| BBox { min: p, max: p }).collect();
         let tree = PackedRtree::new(0, points.len() as u32, build_levels(&boxes).into());
         for _ in 0..200 {
-            let query = Coord::from_degrees(54.0 + rng.gen_range(-0.6..0.6), 10.0 + rng.gen_range(-0.9..0.9));
+            let query = Coord::from_degrees(lat + rng.gen_range(-0.6..0.6), lon + rng.gen_range(-0.9..0.9));
             let frame = LocalFrame::new(query);
             let found = tree
                 .nearest(&frame, 1e7, |item| {
@@ -157,6 +163,22 @@ mod tests {
                 .fold(f64::INFINITY, f64::min);
             assert!((found.distance_m - brute).abs() < 1e-9);
             assert!((haversine_m(query, points[found.item as usize]) - brute).abs() / brute.max(1.0) < 0.01);
+        }
+    }
+
+    #[test]
+    fn box_distance_never_exceeds_the_distance_to_a_point_inside() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+        for _ in 0..20_000 {
+            let corner = |rng: &mut rand::rngs::StdRng| Coord::from_degrees(rng.gen_range(-60.0..60.0), 180.0 + rng.gen_range(-3.0..3.0));
+            let (a, b) = (corner(&mut rng), corner(&mut rng));
+            let mut bbox = BBox::EMPTY;
+            bbox.include(a);
+            bbox.include(b);
+            let inside = Coord { lat: rng.gen_range(bbox.min.lat..=bbox.max.lat), lon: rng.gen_range(bbox.min.lon..=bbox.max.lon) };
+            let frame = LocalFrame::new(corner(&mut rng));
+            let p = frame.project(inside);
+            assert!(frame.distance_to_box_m(bbox.min, bbox.max) <= p.x.hypot(p.y) + 1e-6);
         }
     }
 

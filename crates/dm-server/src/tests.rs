@@ -95,7 +95,7 @@ async fn health_reports_the_dataset() {
     assert_eq!(status, StatusCode::OK);
     let value: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["status"], "ok");
-    assert_eq!(value["dataset"]["profile"], "car-v2");
+    assert_eq!(value["dataset"]["profile"], dm_build::profile::PROFILE_NAME);
 }
 
 #[tokio::test]
@@ -264,6 +264,20 @@ async fn off_road_points_pay_for_the_way_to_the_road() {
     let to_road_and_back_m = 2.0 * snapped.distance_m;
     assert!((shorter(&distances) - to_road_and_back_m).abs() <= 2.0, "{distances:?} vs {to_road_and_back_m} m");
     assert!((shorter(&times) - to_road_and_back_m * 3.6 / 15.0).abs() <= 2.0, "{times:?} vs {to_road_and_back_m} m at 15 km/h");
+}
+
+#[test]
+fn nobody_starts_a_trip_on_a_ferry_or_a_motorway() {
+    let network = Network::open(dataset(), Residency::OnDemand).expect("opening fixture");
+    let manifest = &network.manifest;
+    assert!(manifest.snappable_chain_count < manifest.chain_count, "the Kiel fixture has car ferries and motorways");
+    for ferry in manifest.snappable_chain_count..manifest.chain_count {
+        let on_board: Vec<Coord> = network.chains.polyline(ferry, &network.node_coords).collect();
+        let point = on_board[on_board.len() / 2];
+        if let Some(snapped) = snap(&network, point, &SnapConfig::default()) {
+            assert!(snapped.placement.chain < manifest.snappable_chain_count, "a point on no-stopping chain {ferry} attached to it");
+        }
+    }
 }
 
 #[tokio::test]
