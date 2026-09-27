@@ -94,8 +94,9 @@ Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests
 
 ## Try it
 
-A public instance serves the whole planet at `http://100.57.61.188:8080` (one c5a.4xlarge in AWS us-east-1, availability
-zone ID `use1-az5`).
+Public instances serve the whole planet, each on one c5a.4xlarge: `http://3.65.232.220:8080` in Frankfurt
+(eu-central-1, availability zone ID `euc1-az2`) and `http://100.57.61.188:8080` in northern Virginia (us-east-1,
+`use1-az5`). They are a demo and may be taken down.
 
 ```bash
 curl -s http://100.57.61.188:8080/health
@@ -151,3 +152,8 @@ cargo test --release --workspace
 Unit and property tests (contraction hierarchy against Dijkstra on random graphs, spatial index against brute force,
 SIMD kernel against scalar code, profile tag handling) and end-to-end tests that build a dataset from real OSM data and
 exercise the HTTP API over TCP. `dm-bench verify` checks a full dataset against an independent Dijkstra.
+
+## License
+
+The code is MIT-licensed (see [LICENSE](LICENSE)). Road data and the Kiel test extract are © OpenStreetMap
+contributors under the Open Database License.
