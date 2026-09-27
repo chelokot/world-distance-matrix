@@ -5,7 +5,7 @@ apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y unzip curl
 curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
 (cd /tmp && unzip -q awscli.zip && ./aws/install)
-latest="$(for year in "$(date +%Y)" "$(( $(date +%Y) - 1 ))"; do aws s3 ls --no-sign-request "s3://osm-pds/$year/" | grep -o "planet-[0-9]*\.osm\.pbf$" | sed "s|^|$year/|"; done | sort -t/ -k2 | tail -1)"
+latest="$(aws s3 ls --no-sign-request --recursive s3://osm-pds/ | grep -o '[0-9]\{4\}/planet-[0-9]*\.osm\.pbf$' | sort -t/ -k2 | tail -1)"
 version="$(basename "$latest" .osm.pbf)"
 mkdir -p /data
 aws s3 cp --no-sign-request --only-show-errors "s3://osm-pds/$latest" /data/planet.osm.pbf
