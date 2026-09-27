@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -139,6 +140,30 @@ async fn binary_and_json_agree_and_reflect_one_way_streets() {
         }
     }
     assert!(asymmetric > 0, "central Kiel has one-way streets, so some pairs must differ by direction");
+}
+
+#[tokio::test]
+async fn json_is_compressed_when_asked_and_binary_never() {
+    let body = body_for(&kiel_points(60), json!({}));
+    let (_, _, plain) = call(app(), "POST", "/matrix", body.clone(), None).await;
+    let request = |accept: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/matrix")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, accept)
+            .header(header::ACCEPT_ENCODING, "gzip")
+            .body(Body::from(body.clone()))
+            .expect("request")
+    };
+    let response = app().oneshot(request("application/json")).await.unwrap();
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    let compressed = response.into_body().collect().await.unwrap().to_bytes();
+    let mut unpacked = Vec::new();
+    flate2::read::GzDecoder::new(&compressed[..]).read_to_end(&mut unpacked).unwrap();
+    assert_eq!(unpacked, plain);
+    let response = app().oneshot(request(BINARY_CONTENT_TYPE)).await.unwrap();
+    assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
 }
 
 #[tokio::test]

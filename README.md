@@ -73,6 +73,11 @@ the server's compute time including encoding: `server-timing: queue;dur=0.1, com
 responses carry only `queue`, because their rows are sent while later rows are still being computed. To see it next to
 the client's own time: `curl -s -o out.json -w '%header{server-timing} | total %{time_total}s\n' ...`.
 
+JSON responses are compressed (zstd or gzip, fastest level) when the request allows it with `Accept-Encoding`, as
+Postman, Bruno, HTTPie and browsers do by default and curl does with `--compressed`: 1,000² shrinks from 10.5 MB to
+4.4–5.2 MB. Binary responses are never compressed; they are the fast path inside a region, where 8 MB moves in ~13 ms
+and compressing would cost more than it saves.
+
 **Errors** are JSON `{"error": "..."}`: `400` malformed request, `406` unsupported `Accept`, `413` too many
 locations/cells (limits below), `503` at capacity (with `Retry-After`; retry with back-off).
 

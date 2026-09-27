@@ -19,6 +19,9 @@ use clap::Parser;
 use dm_core::network::Network;
 use dm_core::snap::SnapConfig;
 use dm_core::store::Residency;
+use dm_core::wire::BINARY_CONTENT_TYPE;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
+use tower_http::compression::{CompressionLayer, CompressionLevel};
 
 use crate::api::{negotiate, ApiError, Limits, MatrixRequest};
 use crate::engine::{AdmissionConfig, Engine};
@@ -119,6 +122,9 @@ fn router(state: Arc<AppState>, max_locations: usize) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .layer(DefaultBodyLimit::max(max_locations * 256 + 65_536))
+        .layer(
+            CompressionLayer::new().quality(CompressionLevel::Fastest).compress_when(DefaultPredicate::new().and(NotForContentType::new(BINARY_CONTENT_TYPE))),
+        )
         .with_state(state)
 }
 

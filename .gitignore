@@ -12,3 +12,5 @@ __pycache__/
 .claude/
 .eip
 .dev-id
+.eip-eu
+.prod-eu-id
