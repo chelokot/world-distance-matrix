@@ -518,7 +518,7 @@ distances, times = m[:, 0], m[:, 1]          # zero-copy views</pre>
         <li><strong>Turn delays for Europe.</strong> An edge-based graph for the continent where the customers are would remove the ~1.4 % city bias; the VRP experiment says it is not urgent.</li>
         <li><strong>Time-of-day profiles.</strong> A customizable contraction hierarchy could serve one matrix per time slice, with metric updates in seconds.</li>
         <li><strong>Booking in ~1 ms.</strong> Caching per-point search spaces across requests would remove the 1,000 searches that a 1 × 1,000 request spends its 10 ms on.</li>
-        <li><strong>Compression for thin clients.</strong> Byte-shuffled zstd shrinks the body 2.2× for ~5 ms of CPU &mdash; pointless on a 5 Gbit/s in-VPC link, useful below ~2 Gbit/s.</li>
+        <li><strong>Thin clients, further.</strong> The compact format already sends exact values at ~3&nbsp;% of the binary size and decodes them while they arrive: a browser in Romania gets a 1,000-point Eurasian matrix in ~80&nbsp;ms end to end, and 20,000 points (400 million routes) in ~7&nbsp;s. Decoding frames in parallel in Web Workers and renumbering CH nodes for memory locality are the next steps.</li>
         <li><strong>Faster cold start and a second host</strong> for zero-downtime dataset updates.</li>
       </ul>
     </section>

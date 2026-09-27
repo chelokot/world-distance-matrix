@@ -55,30 +55,32 @@ So `distance(i, j)` is the word at `16 + 4 * (2 * cols * i + j)` and `time(i, j)
 then `m[:, 0]` are distances and `m[:, 1]` times (zero-copy views). The body is streamed while rows are still being
 computed, with an exact `Content-Length`; a truncated body means the request failed.
 
-**Compact** (`Accept: application/vnd.distance-matrix.compact.v1`) — the same exact values in about a tenth of the
-binary size, for clients on slower links. Rows and columns are reordered along a Hilbert curve, so neighbouring rows
-and columns are neighbours on the map; every cell is then sent as its difference from what its neighbours predict
-(`v[i][j] − v[i−1][j] − v[i][j−1] + v[i−1][j−1]`, which is close to zero because nearby routes share most of their
-way), and bands of rows are zstd-compressed in parallel and streamed while later rows are computed. A 1,000-point
-Hamburg matrix is 0.8 MB instead of 8 MB; 1,000 points spread over every continent are 0.8 MB too. All integers are
-unsigned 32-bit little-endian:
+**Compact** (`Accept: application/vnd.distance-matrix.compact.v2`) — the same exact values in about 3 % of the binary
+size, for clients on the open internet. It carries distances in decimetres and times in milliseconds, the units the
+routing core adds up exactly, and the decoder rounds them to metres and seconds exactly like the other formats. Rows and
+columns are reordered along a Hilbert curve, and every point gets up to eight parents: the nearest earlier routable
+points among the previous 1,024. A cell `(i, j)` is predicted as `v(i, p) + v(r, j) − v(r, p)` from a row parent `r` and
+a column parent `p`; when the four routes meet in a common junction the prediction is exact to the decimetre and the
+millisecond, which holds for ~89 % of cells with the nearest parents and ~97 % with the best of the 64 pairs. Each cell
+is then coded as exact, unreachable, or the chosen pair plus a residual, by an adaptive binary range coder whose
+contexts are the states of the cell's left and upper neighbours; residual mantissas travel as raw bits. The
+1,000-point Eurasian demo matrix is 250 kB instead of 8 MB, 1,000 points around Hamburg 180 kB, and 20,000 Eurasian
+points (400 million routes) 12 MB. All integers are unsigned 32-bit little-endian:
 
 | offset | content                                                                                                  |
 |--------|----------------------------------------------------------------------------------------------------------|
-| 0      | magic `DMC1`                                                                                             |
-| 4      | `rows`, `cols`, `frames`                                                                                 |
-| 16     | row order: `rows` indices; encoded row `k` is row `row_order[k]` of the answer                             |
-| …      | column order: `cols` indices                                                                              |
-| …      | `frames` times: rows in the frame, compressed length, one zstd frame                                     |
+| 0      | magic `DMC2`                                                                                             |
+| 4      | `rows`, `cols`, `shared` (1 when the columns are the rows)                                               |
+| 16     | header section: row order and parents, then column order and parents unless shared                       |
+| …      | ⌈rows / 32⌉ frame sections of 32 rows                                                                     |
 | …      | server timings in microseconds: queue wait, until the first frame, until the last frame                  |
 
-A decompressed frame of `h` rows holds, for its `h × cols` cells in encoded order, the four byte planes of the zigzag
-residuals of the distances, then those of the times, then one bit per cell (least significant first) set where there is
-no route. Cells without a route count as 0 and neighbours outside the matrix as 0, so a frame decodes as two cumulative
-sums added to the last row of the previous frame. The timings at the end exist because rows are sent while later ones
-are still being computed, so no header could carry them. `bench/try_api.py` has a 25-line numpy decoder (Python 3.14
-for the standard-library zstd); `dm_wire::compact::decode` is the Rust one, used by the server's tests and, compiled to
-WebAssembly, by the demo page.
+A section is its range-coded length, its raw length, the range-coded bytes and the raw bits. The bit-level model lives
+in `crates/dm-wire/src/compact.rs`, where one function codes a cell for both the encoder and the decoder.
+`dm_wire::compact::CompactDecoder` decodes while bytes arrive, keeps only the last 1,024 rows and hands every finished
+row to a `RowSink`; the server's tests use it, the demo page runs it compiled to WebAssembly, and `bench/try_api.py`
+loads it natively (`cargo build --release -p dm-web`). The timings at the end exist because rows are sent while later
+ones are still being computed, so no header could carry them.
 
 **Semantics**
 
@@ -106,11 +108,11 @@ and compressing would cost more than it saves.
 **Errors** are JSON `{"error": "..."}`: `400` malformed request, `406` unsupported `Accept`, `413` too many
 locations/cells (limits below), `503` at capacity (with `Retry-After`; retry with back-off).
 
-| limit (default)          | value                    |
-|--------------------------|--------------------------|
-| locations per request    | 25,000                   |
-| cells per binary request | 100,000,000 (10k × 10k)  |
-| cells per JSON request   | 16,000,000 (4k × 4k)     |
+| limit (default)                     | value                    |
+|-------------------------------------|--------------------------|
+| locations per request               | 25,000                   |
+| cells per binary or compact request | 100,000,000 (10k × 10k); the public instance allows 400,000,000 (20k × 20k) |
+| cells per JSON request              | 16,000,000 (4k × 4k)     |
 
 ### `GET /` — demo page
 
@@ -118,7 +120,9 @@ A single self-contained HTML file (`web/dist/matrix-demo.html`, built by `web/bu
 `dm-web` crate compiled to WebAssembly, embedded gzip-compressed). It spreads evenly spaced points over Eurasia that
 are connected with Frankfurt by road, requests their matrix in any of the three formats, and shows where the time went:
 connection, the way to the server, queue, snapping and search setup, computing rows, the way back, download and
-decoding in the browser, which happens piece by piece while the answer is still arriving. Two clicked points show their distance and time next to the straight line, with a link to
+decoding in the browser, which happens piece by piece while the answer is still arriving. It goes up to 20,000
+points; above 25 million routes the page keeps statistics while decoding instead of the whole matrix and asks the server
+for the pair you click. Two clicked points show their distance and time next to the straight line, with a link to
 the same route in Google Maps. The page also works opened from disk; the API allows cross-origin calls and exposes
 its timings to browsers.
 

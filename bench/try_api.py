@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 import argparse
+import ctypes
+import functools
 import http.client
-import io
 import json
 import math
+import pathlib
 import random
 import statistics
 import struct
 import time
 import urllib.parse
 
-ACCEPT = {"binary": "application/vnd.distance-matrix.v1", "compact": "application/vnd.distance-matrix.compact.v1", "json": "application/json"}
+ACCEPT = {"binary": "application/vnd.distance-matrix.v1", "compact": "application/vnd.distance-matrix.compact.v2", "json": "application/json"}
 REQUEST = "application/vnd.distance-matrix.request.v1"
 NO_ROUTE = 0xFFFFFFFF
 
@@ -39,7 +41,7 @@ def body(points: list[tuple[float, float]], binary: bool, sources: list[int] = (
 
 def post(connection: http.client.HTTPConnection, payload: bytes, format: str) -> http.client.HTTPResponse:
     content_type = REQUEST if payload[:4] == b"DMQ1" else "application/json"
-    connection.request("POST", "/matrix", payload, {"Content-Type": content_type, "Accept": ACCEPT[format], "Accept-Encoding": "zstd" if format == "compact" else "identity"})
+    connection.request("POST", "/matrix", payload, {"Content-Type": content_type, "Accept": ACCEPT[format]})
     response = connection.getresponse()
     if response.status != 200:
         raise SystemExit(f"HTTP {response.status}: {response.read()[:300].decode(errors='replace')}")
@@ -58,60 +60,54 @@ def near_roads(connection: http.client.HTTPConnection, count: int, rng: random.R
     return found[:count], tried
 
 
-def decode_compact(stream: io.BytesIO):
-    import numpy as np
-
-    _, rows, cols, frames = struct.unpack("<4sIII", stream.read(16))
-    row_order = np.frombuffer(stream.read(4 * rows), "<u4")
-    col_order = np.frombuffer(stream.read(4 * cols), "<u4")
-    encoded = np.empty((2, rows, cols), np.int64)
-    no_route = np.empty((rows, cols), bool)
-    previous = np.zeros((2, 1, cols), np.int64)
-    first = 0
-    for _ in range(frames):
-        (height,) = struct.unpack("<I", stream.read(4))
-        cells = height * cols
-        payload = stream.read(8 * cells + (cells + 7) // 8)
-        planes = np.frombuffer(payload, np.uint8, 8 * cells).reshape(2, 4, cells)
-        zigzag = np.ascontiguousarray(planes.transpose(0, 2, 1)).view("<u4").reshape(2, height, cols).astype(np.int64)
-        block = previous + np.cumsum(np.cumsum((zigzag >> 1) ^ -(zigzag & 1), axis=2), axis=1)
-        previous = block[:, -1:, :]
-        encoded[:, first : first + height] = block
-        no_route[first : first + height] = np.unpackbits(np.frombuffer(payload, np.uint8, offset=8 * cells), count=cells, bitorder="little").reshape(height, cols)
-        first += height
-    queue_us, prepare_us, compute_us = struct.unpack("<III", stream.read(12))
-    encoded[:, no_route] = NO_ROUTE
-    matrix = np.empty((2, rows, cols), np.uint32)
-    matrix[:, row_order[:, None], col_order[None, :]] = encoded
-    return matrix[0], matrix[1], (queue_us / 1000, prepare_us / 1000, compute_us / 1000)
+@functools.cache
+def compact_decoder() -> ctypes.CDLL:
+    library = ctypes.CDLL(str(pathlib.Path(__file__).resolve().parents[1] / "target/release/libdm_web.so"))
+    library.input.argtypes = [ctypes.c_size_t]
+    for name in ("input", "distances", "server_times"):
+        getattr(library, name).restype = ctypes.c_void_p
+    return library
 
 
-def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -> tuple[float, int, int, str]:
+def stream_compact(response: http.client.HTTPResponse, cells: int) -> tuple[int, list[int], list[int]]:
+    decoder, size = compact_decoder(), 0
+    decoder.stream_start(1)
+    while not decoder.stream_complete():
+        chunk = response.read1(1 << 16)
+        if not chunk:
+            raise SystemExit("the compact answer ended early")
+        size += len(chunk)
+        ctypes.memmove(decoder.input(len(chunk)), chunk, len(chunk))
+        if not decoder.stream_feed():
+            raise SystemExit("the compact answer could not be decoded")
+    response.read()
+    decoder.stream_finish()
+    return size, (ctypes.c_uint32 * cells).from_address(decoder.distances()), (ctypes.c_uint32 * 3).from_address(decoder.server_times())
+
+
+def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str, points: int) -> tuple[float, int, int, str]:
     started = time.perf_counter()
     response = post(connection, payload, format)
     server = response.getheader("server-timing", "")
     if format == "compact":
-        from compression import zstd
-
-        data = response.read()
-        size = len(data)
-        body = zstd.decompress(data) if response.getheader("content-encoding") == "zstd" else data
-        distances, _, (queue, prepare, compute) = decode_compact(io.BytesIO(body))
-        unreachable = int((distances == NO_ROUTE).sum())
-        server = f"queue {queue:.1f} ms, snapping and setup {prepare:.1f} ms, all rows {compute:.1f} ms"
+        size, distances, (queue, prepare, compute) = stream_compact(response, points * points)
+        elapsed = time.perf_counter() - started
+        unreachable = list(distances).count(NO_ROUTE)
+        server = f"queue {queue / 1000:.1f} ms, snapping and setup {prepare / 1000:.1f} ms, all rows {compute / 1000:.1f} ms"
     elif format == "binary":
         data = response.read()
-        size = len(data)
+        elapsed, size = time.perf_counter() - started, len(data)
         unreachable = memoryview(data)[16:].cast("I").tolist().count(NO_ROUTE) // 2
     else:
         data = response.read()
-        size = len(data)
-        unreachable = sum(row.count(None) for row in json.loads(data)["times"])
-    return (time.perf_counter() - started) * 1000, size, unreachable, server
+        times = json.loads(data)["times"]
+        elapsed, size = time.perf_counter() - started, len(data)
+        unreachable = sum(row.count(None) for row in times)
+    return elapsed * 1000, size, unreachable, server
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Request square distance matrices and report client-side time to last byte, decoding included.")
+    parser = argparse.ArgumentParser(description="Request square distance matrices and report client-side time to last byte, decoding included (compact needs cargo build --release -p dm-web).")
     parser.add_argument("--url", default="http://3.65.232.220:8080")
     parser.add_argument("--center", default="53.55,10.0", help="lat,lon around which random points are drawn (default: Hamburg)")
     parser.add_argument("--radius-km", type=float, default=25.0)
@@ -135,8 +131,8 @@ def main() -> None:
         batches = [around(center, args.radius_km, args.points, rng) for _ in range(args.requests + 3)]
     payloads = [body(points, args.format != "json") for points in batches]
     for payload in payloads[:3]:
-        fetch(connection, payload, args.format)
-    results = [fetch(connection, payload, args.format) for payload in payloads[3:]]
+        fetch(connection, payload, args.format, args.points)
+    results = [fetch(connection, payload, args.format, args.points) for payload in payloads[3:]]
     latencies = sorted(result[0] for result in results)
     percentile = lambda q: latencies[min(len(latencies) - 1, round(q * (len(latencies) - 1)))]
     print(f"{args.points} x {args.points} {args.format}, {len(results)} requests on one connection, response {results[-1][1] / 1e6:.2f} MB")

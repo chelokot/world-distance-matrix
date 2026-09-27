@@ -475,8 +475,11 @@ stable under abuse, but there is no per-client quota, so one heavy client can ma
   one matrix per time slice with a metric update in seconds.
 * **Booking at ~1 ms.** A 1 × 1,000 request spends its 10 ms on the 1,000 searches of the existing stops; caching
   per-point search spaces across requests would remove them.
-* **Compression for thin clients.** Byte-shuffled zstd shrinks the binary body 2.2× for ~5 ms of CPU; worthless on a
-  5 Gbit/s in-VPC link, worth offering to clients below ~2 Gbit/s.
+* **Thin clients, further.** The compact format (see the README) already sends exact values at ~3 % of the binary
+  size and decodes them while they arrive: a browser in Romania gets a 1,000-point Eurasian matrix in ~80 ms end to
+  end, and 20,000 points (400 million routes) in ~7 s. The browser's single decoding thread is now the slowest stage;
+  frame-local contexts would let Web Workers decode frames in parallel. Renumbering CH nodes for memory locality would
+  speed up setup and rows, which wait on memory.
 * **Faster cold start** (parallel prefetch of the 19 GB at the volume's 400 MB/s instead of ~240 MB/s) and a second
   host behind a load balancer for zero-downtime dataset updates.
 
