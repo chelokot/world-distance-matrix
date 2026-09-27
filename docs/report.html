@@ -361,6 +361,25 @@ dm-server  (c5a.4xlarge): mmap + pre-fault + mlock 19 GB of flat arrays, validat
       <p><strong>Bugs this process found, all fixed:</strong> ferries tagged only <code>hgv=yes</code> were excluded (a Kiel Canal ferry); car trains ignored <code>maxspeed</code> and <code>oneway</code> (the Sylt Shuttle ran at 20 km/h, making Sylt 89 min too far); a stale dataset was correctly refused at load. One disagreement is OSRM's: it routes cars to Helgoland, a car-free island, over a passenger ferry; this service returns <code>null</code>.</p>
     </div>
     <div class="col">
+      <h3>Sweeping the whole world found five more bugs</h3>
+      <p><code>bench/sweep.py</code> samples points within 5 km of a road over Europe or the globe (1,500 each, 2.2 M cells) and flags impossible cells (shorter than the great circle, triangle violations, one-way reachability) and suspicious ones (above 130 km/h, detours above 5&times;, one direction more than twice the other). No cell was impossible, before or after; the suspicious ones led here (release car-v3):</p>
+    </div>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th>Bug</th><th>Example</th><th>car-v2 &rarr; car-v3</th></tr></thead>
+        <tbody>
+          <tr><td>Roads across the 180th meridian: snapping pruned them, and OSM's split at &plusmn;180&deg; was not joined</td><td>Taveuni, Fiji: Waiyevo &rarr; Matei</td><td><code>null</code> &rarr; 28 min</td></tr>
+          <tr><td>A point at sea boarded a passing ferry mid-crossing</td><td>A point off Ibiza routed via Algeria (10,400 km)</td><td>80 of 82 sample points that lost their routes were at sea</td></tr>
+          <tr><td>An address beside a motorway started on the motorway</td><td>40 points 25 m from the A7, Hamburg, vs. their own street</td><td>median 26&ndash;78 s, 118 of 240 pairs &gt; 2 min &rarr; 12 s, none</td></tr>
+          <tr><td><code>duration=13</code> on a 351 km ferry meant hours, read as minutes</td><td>Bydgoszcz &rarr; Blekinge at 190 km/h</td><td>13.2 h both ways; cells &gt; 130 km/h 503 &rarr; 0</td></tr>
+          <tr><td>Seasonal closures ignored</td><td>Grimsel <code>no @ (Oct-May)</code></td><td>closed in datasets built during the closure</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>Against OSRM's public demo server (its snapshot and snapped positions, up to 100 points per region) Germany, France and Poland agree at a median of 0.989&ndash;0.993 with 0.3&ndash;0.5 % of pairs outside &plusmn;20 %. The wider tails elsewhere are choices, not errors: OSRM's demo routes farm tracks at 5 km/h (Spain, Romania), and its island ferries are 2&ndash;5&times; slower than the timetables (inland Sardinia &rarr; Tuscany 21 h vs. our 8.9 h; Peloponnese &rarr; Paros 35 h vs. 7.2 h). Hostile requests get precise <code>400</code>/<code>413</code> errors; the poles, null island and open sea are <code>null</code>.</p>
+    </div>
+    <div class="col">
       <h3>The task's own example, traced to the metre</h3>
       <p>The task statement shows an illustrative answer for three points near Neumünster. Four engines on the same request, distance in km / time in minutes (OSRM and Valhalla are their public demo servers, with their own data):</p>
     </div>

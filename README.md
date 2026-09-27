@@ -161,6 +161,8 @@ python3 bench/try_api.py --points 1000 --center 53.55,10.0
 
 `--format compact` uses the compact format, `--world` draws the points uniformly from the whole globe (most land in
 the sea, more than 5 km from any road), and `--world --on-roads` keeps only points within 5 km of a road.
+`python3 bench/sweep.py --region world` samples road-side points, requests their matrix and reports impossible cells
+(shorter than the great circle, triangle violations, one-way reachability) and the most suspicious ones.
 
 From outside AWS the result includes the internet round trip and the time your line needs for 8 MB. The 100 ms target
 is for a client in the same region: run the script on any EC2 instance in eu-central-1, ideally in `euc1-az2`.

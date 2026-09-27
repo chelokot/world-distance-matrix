@@ -290,6 +290,47 @@ car trains ignored `maxspeed` and `oneway` (Sylt Shuttle at 20 km/h → 89 min t
 without grouped arcs was correctly refused at load. One disagreement is OSRM's error, not ours: OSRM routes cars to
 Helgoland, a car-free island, over a passenger ferry; we return `null`.
 
+**6. Whole-world sweep and hostile inputs (release car-v3).** The checks above were regional. To find what breaks
+elsewhere, `bench/sweep.py` samples points within 5 km of a road over Europe or the whole globe (1,500 each, 2.2 M
+cells), requests their matrix from the public instance and flags cells that are impossible (a route shorter than the
+great circle, a triangle-inequality violation, a pair reachable in one direction only) or suspicious (an average speed
+above 130 km/h, a detour above 5×, one direction more than twice the other). There were no impossible cells, before or
+after. The suspicious ones led to five bugs:
+
+| bug | example | evidence car-v2 → car-v3 |
+|---|---|---|
+| Snapping pruned roads just across the 180th meridian (the R-tree bound clamped longitudes without wrapping), and OSM splits every road there into two nodes at ±180° that the build did not join | Taveuni, Fiji: Waiyevo → Matei airport | `null` → 28 min |
+| A point at sea within 5 km of a sea lane boarded the ferry mid-crossing | 55.52 N 16.76 E (Baltic) routed from Frankfurt; a point off Ibiza routed via Algeria (10,400 km) | 80 of 82 sample points that lost their routes were at sea; all now `null` |
+| An address beside a motorway started on the motorway | 40 points 25 m from the A7 in Hamburg whose own street is 30–150 m away, to 6 destinations: extra time vs. that street | median 26 s out / 78 s in, p90 5–6 min, 118 of 240 pairs > 2 min → median 12 s (the walk to the street), p90 26 s, 0 pairs > 2 min |
+| `duration=13` on the 351 km Gdańsk–Karlshamn ferry: minutes by the OSM definition, 13 hours by intent (fixed in OSM the day our planet was cut) | Bydgoszcz → Blekinge | 3.3 h (190 km/h) one way, 13.2 h back → 13.2 h both ways; Europe sweep: 503 cells above 130 km/h → 0, 995 cells more than twice their reverse → 26 |
+| Seasonal closures ignored | Grimsel `no @ (Oct-May)`, Tremola `no @ (Nov-May)` | closed in datasets built during the closure |
+
+The fixes: longitudes wrap in every bound and ±180° nodes at the same latitude are one junction; motorways, their slip
+roads, expressways, tunnels, ferries and car trains stay routable but never take a point (3.8 million chains
+of 295 million); a ferry duration implying more than 80 km/h (200 km/h for a car train) is re-read as hours if it was a
+bare number, else replaced by the default speed; date-range conditional closures are evaluated on the build day.
+Of 82 sample points that became unroutable, the two on land now attach to a small disconnected fragment instead of a
+motorway; that is the documented trade-off of R5 (a fragment wins when it is more than 1 km closer than the main
+network, which keeps car-free islands `null`).
+
+Hostile requests get precise errors or sane answers: latitude 91, longitude 181, `1e308`, strings, unknown fields,
+negative or out-of-range indices and truncated binary bodies are `400`; 25,000² cells are `413`; the poles, null island
+and points in open sea are `null`; 5,000 identical points return 25 M zeros in 0.35 s; Ushuaia → Prudhoe Bay is `null`
+(the Darién Gap).
+
+**Against OSRM's public demo server** (its own OSM snapshot and snapped positions, fed to both engines; up to 100 points
+per region; pairs over 5 min):
+
+| region | time ours/OSRM, median (p10–p90) | outside 0.8–1.25 | what the tail is |
+|---|---|---|---|
+| Germany, France, Poland | 0.989–0.993 (0.94–0.998) | 0.3–0.5 % | turn penalties (R3) |
+| Norway | 0.994 (0.930–1.009) | 2.9 % | fjord ferries: OSRM also takes ferries not tagged for cars |
+| Spain, Romania | 0.971–0.977 (0.86–1.00) | 3.5–4.5 % | OSRM's demo routes `highway=track` farm roads at 5 km/h; we do not route tracks (R5), so points on a track more than 5 km from a road are `null` for us |
+| Italy, Greece | 0.980–0.990 (0.61–0.998) | 17 % | island ferries: inland Sardinia → Tuscany is 8.9 h for us (via Olbia) and 21 h for OSRM; Peloponnese → Paros 7.2 h vs. 35 h |
+
+Where the engines disagree beyond turn penalties, it is a modelling choice (tracks) or OSRM's ferry timing, not an
+error in the matrix.
+
 
 ## 6. Performance evidence
 
