@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Distance Matrix</title>
+<style>/*LEAFLET_CSS*/</style>
+<style>
+:root {
+  --ink: #17212b; --muted: #5b6875; --line: #e2e6ea; --ground: #f5f7f9; --panel: #ffffff;
+  --blue: #2563eb; --orange: #e8590c; --amber: #f59f00; --green: #2f9e44; --violet: #7048e8; --grey: #98a2ad;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { display: grid; grid-template-columns: minmax(22rem, 27rem) 1fr; font: 0.875rem/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--ground); }
+#panel { overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 1.25rem 1.25rem 2rem; display: flex; flex-direction: column; gap: 1.25rem; }
+#map { height: 100%; }
+h1 { font-size: 1.25rem; margin: 0 0 0.25rem; letter-spacing: -0.01em; }
+h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 0.6rem; }
+p { margin: 0.4rem 0 0; }
+code { font-size: 0.8rem; background: var(--ground); padding: 0.05rem 0.3rem; border-radius: 0.25rem; }
+.note { color: var(--muted); font-size: 0.8rem; }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+select, button { font: inherit; border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.4rem 0.7rem; background: var(--panel); color: var(--ink); }
+button { cursor: pointer; }
+button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+button:disabled { opacity: 0.45; cursor: default; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 0.4rem; overflow: hidden; }
+.segmented button { border: 0; border-radius: 0; padding: 0.4rem 0.65rem; }
+.segmented button.on { background: var(--ground); font-weight: 600; }
+.total { display: flex; align-items: baseline; gap: 0.5rem; margin-top: 0.9rem; }
+.total span { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+#timeline { display: grid; gap: 0.3rem; margin-top: 0.6rem; }
+.lane { display: grid; grid-template-columns: 9.5rem 1fr; gap: 0.5rem; align-items: center; font-size: 0.75rem; color: var(--muted); }
+.track { position: relative; height: 0.7rem; background: var(--ground); border-radius: 0.2rem; }
+.bar { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 0.2rem; }
+table { width: 100%; border-collapse: collapse; margin-top: 0.8rem; font-variant-numeric: tabular-nums; }
+td { padding: 0.3rem 0; border-top: 1px solid var(--line); vertical-align: top; }
+td.ms { text-align: right; white-space: nowrap; padding-left: 0.75rem; font-weight: 600; }
+td small { display: block; color: var(--muted); font-size: 0.72rem; }
+.swatch { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 0.15rem; margin-right: 0.4rem; }
+.pair { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin-top: 0.4rem; font-variant-numeric: tabular-nums; }
+.pair b { font-weight: 600; }
+a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; border-radius: 0.4rem; background: var(--blue); color: #fff; text-decoration: none; }
+.error { color: #c92a2a; }
+@media (max-width: 50rem) {
+  body { grid-template-columns: 1fr; grid-template-rows: auto 70vh; }
+  #panel { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<aside id="panel">
+  <header>
+    <h1>World Distance Matrix</h1>
+    <p class="note">Road distances and driving times between every pair of points, computed live on the whole OpenStreetMap planet by one server at <code id="server"></code>. This page decodes the answer with Rust compiled to WebAssembly.</p>
+  </header>
+  <section>
+    <h2>1 · Points</h2>
+    <div class="row">
+      <select id="count" aria-label="number of points"><option value="100">100 points</option><option value="300">300 points</option><option value="1000" selected>1,000 points</option><option value="2000">2,000 points</option></select>
+      <button id="spread">Spread over Eurasia</button>
+    </div>
+    <p id="spread-status" class="note">Evenly spaced points across Eurasia (Africa left out), each kept only if a road within 5 km connects both ways with Frankfurt, so every pair has a route.</p>
+  </section>
+  <section>
+    <h2>2 · Matrix</h2>
+    <div class="row">
+      <div class="segmented" id="formats"><button data-format="compact" class="on">Compact</button><button data-format="binary">Binary</button><button data-format="json">JSON</button></div>
+      <button id="run" class="primary" disabled>Compute matrix</button>
+    </div>
+    <p id="run-status" class="note"></p>
+    <div id="result" hidden>
+      <div class="total"><span id="total"></span><span class="note">end to end, request sent to matrix decoded</span></div>
+      <div id="timeline"></div>
+      <table><tbody id="stages"></tbody></table>
+      <p id="facts" class="note"></p>
+      <p id="history" class="note"></p>
+    </div>
+  </section>
+  <section>
+    <h2>3 · Compare one route</h2>
+    <div id="pair" class="note">Compute a matrix, then click two points on the map.</div>
+    <a id="google" class="button" target="_blank" rel="noopener" hidden>Open this route in Google Maps ↗</a>
+  </section>
+</aside>
+<main id="map"></main>
+<script>/*LEAFLET_JS*/</script>
+<script>
+"use strict";
+const WASM_GZIP_BASE64 = "__WASM_GZIP_BASE64__";
+const API = location.port === "8080" ? location.origin : "http://3.65.232.220:8080";
+const MEDIA = { compact: "application/vnd.distance-matrix.compact.v1", binary: "application/vnd.distance-matrix.v1", json: "application/json" };
+const NO_ROUTE = 0xffffffff;
+const FRANKFURT = [50.1109, 8.6821];
+const COLORS = { connect: "var(--grey)", travel: "var(--blue)", queue: "var(--grey)", prepare: "var(--amber)", compute: "var(--orange)", download: "var(--green)", decode: "var(--violet)" };
+const $ = (id) => document.getElementById(id);
+
+let wasm, points = [], markers = [], selection = [], line = null, format = "compact", runs = 0, history = [], matrix = null;
+
+const map = L.map("map", { preferCanvas: true, worldCopyJump: true }).setView([45, 75], 3);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+async function loadWasm() {
+  const packed = Uint8Array.from(atob(WASM_GZIP_BASE64), (c) => c.charCodeAt(0));
+  const bytes = await new Response(new Blob([packed]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  return (await WebAssembly.instantiate(bytes, {})).instance.exports;
+}
+
+const view = (Type, pointer, length) => new Type(wasm.memory.buffer, pointer, length);
+const coordinates = (list) => list.map(([lat, lon]) => ({ lat: Math.round(lat * 1e6) / 1e6, lon: Math.round(lon * 1e6) / 1e6 }));
+const post = (url, body, accept) => fetch(url, { method: "POST", headers: { "content-type": "application/json", accept }, body: JSON.stringify(body) });
+const ms = (value) => (value >= 100 ? value.toFixed(0) : value.toFixed(1)) + " ms";
+const km = (metres) => (metres >= 100000 ? Math.round(metres / 1000).toLocaleString("en") : (metres / 1000).toFixed(1)) + " km";
+const bytes = (count) => (count >= 1e6 ? (count / 1e6).toFixed(2) + " MB" : (count / 1e3).toFixed(1) + " kB");
+function drive(seconds) {
+  const days = Math.floor(seconds / 86400), hours = Math.floor((seconds % 86400) / 3600), minutes = Math.floor((seconds % 3600) / 60);
+  return (days ? `${days} d ` : "") + (days || hours ? `${hours} h ` : "") + `${minutes} min`;
+}
+function crowFlies([lat1, lon1], [lat2, lon2]) {
+  const rad = Math.PI / 180, dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+async function connectedToFrankfurt(candidates) {
+  const all = coordinates([FRANKFURT, ...candidates]);
+  const [outward, inward] = await Promise.all([
+    post(`${API}/matrix`, { coordinates: all, sources: [0] }, MEDIA.binary).then((r) => r.arrayBuffer()),
+    post(`${API}/matrix`, { coordinates: all, destinations: [0] }, MEDIA.binary).then((r) => r.arrayBuffer()),
+  ]);
+  const there = new Uint32Array(outward, 16), back = new Uint32Array(inward, 16);
+  return candidates.filter((_, k) => there[k + 1] !== NO_ROUTE && back[2 * (k + 1)] !== NO_ROUTE);
+}
+
+async function spread() {
+  const wanted = Number($("count").value);
+  const rotation = Math.random() * 360;
+  let lattice = 22 * wanted, kept = [], checked = 0;
+  busy(true);
+  try {
+    for (let attempt = 0; attempt < 6 && kept.length < wanted; attempt++) {
+      const found = wasm.eurasia(lattice, rotation);
+      const flat = view(Float64Array, wasm.points(), 2 * found);
+      const candidates = Array.from({ length: found }, (_, k) => [flat[2 * k], flat[2 * k + 1]]);
+      $("spread-status").textContent = `Checking ${found.toLocaleString("en")} evenly spaced candidates against the road network…`;
+      kept = await connectedToFrankfurt(candidates);
+      checked = found;
+      lattice = Math.ceil(((lattice * wanted) / Math.max(kept.length, 1)) * 1.1);
+    }
+    for (let i = kept.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [kept[i], kept[j]] = [kept[j], kept[i]];
+    }
+    points = kept.slice(0, wanted);
+    $("spread-status").textContent = `${points.length.toLocaleString("en")} points: ${kept.length.toLocaleString("en")} of ${checked.toLocaleString("en")} evenly spaced candidates were within 5 km of a road connected both ways with Frankfurt.`;
+    matrix = null;
+    drawPoints();
+    $("run").disabled = false;
+  } catch (error) {
+    $("spread-status").innerHTML = `<span class="error">Could not reach the server: ${error.message}</span>`;
+  } finally {
+    busy(false);
+  }
+}
+
+function drawPoints() {
+  markers.forEach((marker) => marker.remove());
+  selection = [];
+  line?.remove();
+  markers = points.map(([lat, lon], index) =>
+    L.circleMarker([lat, lon], { radius: 3.5, weight: 1, color: "#0b3d91", fillColor: "#2563eb", fillOpacity: 0.85 }).on("click", () => select(index)).addTo(map));
+  showPair();
+}
+
+function select(index) {
+  if (selection.length === 2) selection = [];
+  selection.push(index);
+  markers.forEach((marker, i) => {
+    const role = selection.indexOf(i);
+    marker.setStyle(role < 0 ? { radius: 3.5, fillColor: "#2563eb", color: "#0b3d91" } : { radius: 7, fillColor: role ? "#7048e8" : "#e8590c", color: "#fff" });
+    if (role >= 0) marker.bringToFront();
+  });
+  line?.remove();
+  line = selection.length === 2 ? L.polyline(selection.map((i) => points[i]), { color: "#17212b", weight: 1.5, dashArray: "4 6" }).addTo(map) : null;
+  showPair();
+}
+
+function showPair() {
+  const google = $("google");
+  google.hidden = true;
+  if (selection.length < 2) {
+    $("pair").textContent = matrix ? (selection.length ? "Now click a second point." : "Click two points on the map.") : "Compute a matrix, then click two points on the map.";
+    return;
+  }
+  const [a, b] = selection;
+  const crow = km(crowFlies(points[a], points[b]));
+  const cell = (from, to) => {
+    if (!matrix) return "compute the matrix first";
+    const index = from * matrix.cols + to;
+    const distance = view(Uint32Array, wasm.distances(), matrix.rows * matrix.cols)[index];
+    const duration = view(Uint32Array, wasm.durations(), matrix.rows * matrix.cols)[index];
+    return distance === NO_ROUTE ? "no route" : `<b>${km(distance)}</b> · <b>${drive(duration)}</b>`;
+  };
+  const place = ([lat, lon]) => `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  $("pair").innerHTML = `<div class="pair"><span style="color:var(--orange)">A → B</span><span>${cell(a, b)}</span><span style="color:var(--violet)">B → A</span><span>${cell(b, a)}</span><span>Straight line</span><span>${crow}</span><span>A</span><span>${place(points[a])}</span><span>B</span><span>${place(points[b])}</span></div>`;
+  google.href = `https://www.google.com/maps/dir/?api=1&origin=${place(points[a]).replace(" ", "")}&destination=${place(points[b]).replace(" ", "")}&travelmode=driving`;
+  google.hidden = false;
+}
+
+function serverTiming(header) {
+  return Object.fromEntries((header ?? "").split(",").map((entry) => entry.trim().split(";dur=")).filter((pair) => pair.length === 2).map(([name, value]) => [name, Number(value)]));
+}
+
+async function compute() {
+  const url = `${API}/matrix?run=${++runs}`;
+  const body = { coordinates: coordinates(points) };
+  busy(true);
+  $("run-status").textContent = `Requesting ${(points.length ** 2).toLocaleString("en")} routes…`;
+  try {
+    performance.clearResourceTimings();
+    const response = await post(url, body, MEDIA[format]);
+    if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+    const payload = await response.arrayBuffer();
+    const received = performance.now();
+    let server;
+    if (format === "json") {
+      const parsed = JSON.parse(new TextDecoder().decode(payload));
+      const decoded = performance.now();
+      const timing = serverTiming(response.headers.get("server-timing"));
+      server = { queue: timing.queue, beforeFirstByte: timing.queue + timing.compute, compute: timing.compute };
+      matrix = { rows: parsed.distances.length, cols: parsed.distances[0].length, received, decoded };
+      wasm.prepare_matrix(matrix.rows, matrix.cols);
+      const distances = view(Uint32Array, wasm.distances(), matrix.rows * matrix.cols);
+      const durations = view(Uint32Array, wasm.durations(), matrix.rows * matrix.cols);
+      parsed.distances.forEach((row, i) => row.forEach((value, j) => { distances[i * matrix.cols + j] = value ?? NO_ROUTE; }));
+      parsed.times.forEach((row, i) => row.forEach((value, j) => { durations[i * matrix.cols + j] = value ?? NO_ROUTE; }));
+    } else {
+      const incoming = new Uint8Array(payload);
+      view(Uint8Array, wasm.input(incoming.length), incoming.length).set(incoming);
+      if (!wasm.decode(format === "compact" ? 1 : 0)) throw new Error("the response could not be decoded");
+      const decoded = performance.now();
+      const header = new DataView(payload);
+      const [rows, cols] = format === "compact" ? [header.getUint32(4, true), header.getUint32(8, true)] : [header.getUint32(8, true), header.getUint32(12, true)];
+      matrix = { rows, cols, received, decoded };
+      if (format === "compact") {
+        const [queue, prepare, total] = Array.from(view(Uint32Array, wasm.server_times(), 3), (us) => us / 1000);
+        server = { queue, prepare, beforeFirstByte: queue + prepare, compute: total };
+      } else {
+        server = { queue: serverTiming(response.headers.get("server-timing")).queue };
+      }
+    }
+    const entry = performance.getEntriesByName(url).at(-1);
+    render(entry, server, payload.byteLength);
+    $("run-status").textContent = "";
+    showPair();
+  } catch (error) {
+    $("run-status").innerHTML = `<span class="error">${error.message}</span>`;
+  } finally {
+    busy(false);
+  }
+}
+
+function render(entry, server, decodedBytes) {
+  const start = entry.startTime, at = (time) => time - start;
+  const detailed = entry.responseStart > 0;
+  const requestStart = detailed ? at(entry.requestStart) : 0;
+  const responseStart = detailed ? at(entry.responseStart) : at(matrix.received);
+  const responseEnd = detailed ? at(entry.responseEnd) : at(matrix.received);
+  const decodeStart = at(matrix.received), decodeEnd = at(matrix.decoded);
+  const connect = detailed && entry.connectEnd > entry.connectStart ? [at(entry.connectStart), at(entry.connectEnd)] : null;
+  const known = server.beforeFirstByte !== undefined;
+  const roundTrip = known ? Math.max(0, responseStart - requestStart - server.beforeFirstByte) : null;
+  const serverStart = known ? requestStart + roundTrip / 2 : null;
+  const decodeLabel = format === "json" ? "Parse JSON" : "Decode (WebAssembly)";
+  const stages = [];
+  if (connect) stages.push(["Connect", "connect", connect[0], connect[1], "TCP handshake; later runs reuse the connection"]);
+  if (known) {
+    stages.push(["To the server", "travel", requestStart, serverStart, "half of the measured network round trip, request upload included"]);
+    stages.push(["Server queue", "queue", serverStart, serverStart + server.queue, "waiting for capacity"]);
+    if (format === "compact") {
+      stages.push(["Snap & set up", "prepare", serverStart + server.queue, serverStart + server.queue + server.prepare, "snap points to roads, backward searches, buckets"]);
+      stages.push(["Compute rows", "compute", serverStart + server.queue + server.prepare, serverStart + server.queue + server.compute, "forward searches; rows leave as they are ready, overlapping the download"]);
+    } else {
+      stages.push(["Compute", "compute", serverStart + server.queue, serverStart + server.beforeFirstByte, "the whole matrix, then JSON encoding"]);
+    }
+    stages.push(["Back to you", "travel", serverStart + server.beforeFirstByte, responseStart, "the first byte's way back: the other half of the round trip"]);
+  } else {
+    stages.push(["Request → first byte", "travel", requestStart, responseStart, "network round trip plus server work before the first row (binary does not report its split)"]);
+  }
+  stages.push(["Download", "download", responseStart, responseEnd, "first to last byte of the answer"]);
+  stages.push([decodeLabel, "decode", decodeStart, decodeEnd, format === "json" ? "JSON.parse in the browser" : "Rust in the browser: zstd, prediction, reordering"]);
+  const total = decodeEnd;
+  $("result").hidden = false;
+  $("total").textContent = ms(total);
+  $("timeline").innerHTML = stages.map(([label, kind, from, to]) =>
+    `<div class="lane"><span>${label}</span><div class="track"><div class="bar" style="left:${(100 * from) / total}%;width:${(100 * (to - from)) / total}%;background:${COLORS[kind]}"></div></div></div>`).join("");
+  $("stages").innerHTML = stages.map(([label, kind, from, to, note]) =>
+    `<tr><td><span class="swatch" style="background:${COLORS[kind]}"></span>${label}<small>${note}</small></td><td class="ms">${ms(to - from)}</td></tr>`).join("");
+  const summary = view(Float64Array, wasm.summary(), 5);
+  const wire = entry.encodedBodySize || decodedBytes;
+  const raw = matrix.rows * matrix.cols * 8;
+  $("facts").textContent = `${(matrix.rows * matrix.cols).toLocaleString("en")} routes · ${bytes(wire)} on the wire (${((100 * wire) / raw).toFixed(0)} % of the raw 4-byte values) · ${(100 * summary[0]).toFixed(1)} % of pairs have a route · median ${km(summary[1])}, ${drive(summary[2])} · longest ${km(summary[3])}, ${drive(summary[4])}`
+    + (known ? ` · server work ${ms(server.queue + server.compute)} of ${ms(total)}` : "");
+  history = [`${format} ${ms(total)}`, ...history].slice(0, 6);
+  $("history").textContent = `Recent runs: ${history.join(" · ")}`;
+}
+
+function busy(on) {
+  for (const id of ["spread", "run", "count"]) $(id).disabled = on || (id === "run" && !points.length);
+  document.querySelectorAll("#formats button").forEach((button) => { button.disabled = on; });
+}
+
+$("formats").addEventListener("click", (event) => {
+  const chosen = event.target.dataset.format;
+  if (!chosen) return;
+  format = chosen;
+  document.querySelectorAll("#formats button").forEach((button) => button.classList.toggle("on", button.dataset.format === chosen));
+});
+$("spread").addEventListener("click", spread);
+$("run").addEventListener("click", compute);
+$("server").textContent = API.replace("http://", "");
+
+loadWasm().then((exports) => { wasm = exports; return spread(); }).catch((error) => {
+  $("spread-status").innerHTML = `<span class="error">${error.message}</span>`;
+});
+</script>
+</body>
+</html>

@@ -49,7 +49,7 @@ pub struct RouteValue {
     pub duration_s: u32,
 }
 
-pub const UNREACHABLE_VALUE: u32 = u32::MAX;
+pub const UNREACHABLE_VALUE: u32 = dm_wire::NO_ROUTE;
 
 impl RouteValue {
     pub const UNREACHABLE: RouteValue = RouteValue { distance_m: UNREACHABLE_VALUE, duration_s: UNREACHABLE_VALUE };

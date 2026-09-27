@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+dm-wire.workspace = true
 bytemuck.workspace = true
 memmap2.workspace = true
 rayon.workspace = true

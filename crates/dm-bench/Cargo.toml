@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 dm-core.workspace = true
+dm-wire.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 osmpbf = "0.3"

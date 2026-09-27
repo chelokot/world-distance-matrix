@@ -14,3 +14,4 @@ __pycache__/
 .dev-id
 .eip-eu
 .prod-eu-id
+web/.cache/

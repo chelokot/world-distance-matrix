@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 dm-core.workspace = true
+dm-wire.workspace = true
 anyhow.workspace = true
 axum = "0.8"
 bytemuck.workspace = true
@@ -18,7 +19,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 tokio-stream = "0.1"
-tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "cors", "set-header"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

@@ -1,0 +1,15 @@
+[package]
+name = "dm-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dm-wire.workspace = true
+ruzstd = "0.8"
+
+[dev-dependencies]
+dm-core.workspace = true

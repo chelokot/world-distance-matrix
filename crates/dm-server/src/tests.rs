@@ -7,12 +7,13 @@ use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use dm_build::{build, BuildConfig};
-use dm_core::compact::{decode_compact, COMPACT_CONTENT_TYPE};
+use dm_core::compact::decode_compact;
 use dm_core::geo::Coord;
 use dm_core::network::Network;
 use dm_core::snap::{snap, SnapConfig};
 use dm_core::store::Residency;
-use dm_core::wire::{decode_binary, BINARY_CONTENT_TYPE};
+use dm_wire::binary::{decode as decode_binary, CONTENT_TYPE as BINARY_CONTENT_TYPE};
+use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -178,7 +179,9 @@ async fn compact_bodies_decode_to_the_binary_matrix() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], COMPACT_CONTENT_TYPE);
         assert!(compact.len() * 3 < binary.len(), "{} compact bytes vs {} binary", compact.len(), binary.len());
-        assert_eq!(decode_compact(&compact).unwrap(), decode_binary(&binary).unwrap());
+        let (matrix, times) = decode_compact(&compact).unwrap();
+        assert_eq!(matrix, decode_binary(&binary).unwrap());
+        assert!(times.prepare_us <= times.compute_us, "{times:?}");
     }
 }
 
@@ -231,6 +234,27 @@ async fn off_road_points_pay_for_the_way_to_the_road() {
     let to_road_and_back_m = 2.0 * snapped.distance_m;
     assert!((shorter(&distances) - to_road_and_back_m).abs() <= 2.0, "{distances:?} vs {to_road_and_back_m} m");
     assert!((shorter(&times) - to_road_and_back_m * 3.6 / 15.0).abs() <= 2.0, "{times:?} vs {to_road_and_back_m} m at 15 km/h");
+}
+
+#[tokio::test]
+async fn browsers_get_the_demo_page_and_may_call_from_anywhere() {
+    let (status, headers, page) = call(app(), "GET", "/", String::new(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+    assert!(String::from_utf8(page).unwrap().contains("<title>World Distance Matrix</title>"));
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/matrix")
+        .header(header::ORIGIN, "null")
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type,accept")
+        .body(Body::empty())
+        .expect("request");
+    let response = app().oneshot(preflight).await.unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    let (_, headers, _) = call(app(), "POST", "/matrix", body_for(&kiel_points(3), json!({})), None).await;
+    assert_eq!(headers["timing-allow-origin"], "*");
 }
 
 #[tokio::test]

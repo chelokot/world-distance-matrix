@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dm-core", "crates/dm-build", "crates/dm-server", "crates/dm-bench"]
+members = ["crates/dm-wire", "crates/dm-core", "crates/dm-build", "crates/dm-server", "crates/dm-bench", "crates/dm-web"]
 
 [workspace.package]
 edition = "2021"
@@ -8,6 +8,7 @@ version = "0.1.0"
 license = "MIT"
 
 [workspace.dependencies]
+dm-wire = { path = "crates/dm-wire" }
 dm-core = { path = "crates/dm-core" }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
@@ -27,6 +28,13 @@ codegen-units = 1
 lto = "fat"
 debug = "line-tables-only"
 panic = "unwind"
+
+[profile.web]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+debug = false
+strip = true
 
 [profile.dev]
 opt-level = 1

@@ -7,11 +7,13 @@ use axum::body::Body;
 use axum::http::{header, HeaderValue};
 use axum::response::Response;
 use bytes::Bytes;
-use dm_core::compact::{compact_header, spatial_order, CompactEncoder, COMPACT_CONTENT_TYPE, FRAME_ROWS};
+use dm_core::compact::{compact_header, spatial_order, CompactEncoder};
 use dm_core::matrix::{Endpoint, MatrixJob};
 use dm_core::network::Network;
 use dm_core::snap::{snap, SnapConfig};
-use dm_core::wire::{binary_header, binary_len, encode_json, BINARY_CONTENT_TYPE};
+use dm_core::wire::encode_json;
+use dm_wire::compact::{ServerTimes, FRAME_ROWS};
+use dm_wire::{binary, compact};
 use rayon::prelude::*;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -190,7 +192,7 @@ impl Engine {
             spec.destinations = col_order.iter().map(|&k| spec.destinations[k as usize]).collect();
             compact_header(&row_order, &col_order)
         } else {
-            binary_header(rows as u32, cols as u32).to_vec()
+            binary::header(rows as u32, cols as u32).to_vec()
         };
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
         let (body_tx, body_rx) = mpsc::unbounded_channel::<Result<Bytes, std::io::Error>>();
@@ -203,6 +205,7 @@ impl Engine {
                 if ready_tx.send(()).is_err() || body_tx.send(Ok(Bytes::from(head))).is_err() {
                     return;
                 }
+                let prepared = started.elapsed();
                 let rows_per_block = (engine.block_bytes / (8 * cols)).max(1);
                 let (rows_per_block, mut encoder) =
                     if compact { (rows_per_block.next_multiple_of(FRAME_ROWS), Some(CompactEncoder::new(cols))) } else { (rows_per_block, None) };
@@ -217,6 +220,11 @@ impl Engine {
                     if body_tx.send(Ok(chunk)).is_err() {
                         return;
                     }
+                }
+                if compact {
+                    let micros = |duration: Duration| duration.as_micros() as u32;
+                    let times = ServerTimes { queue_us: micros(waited), prepare_us: micros(prepared), compute_us: micros(started.elapsed()) };
+                    let _ = body_tx.send(Ok(Bytes::from(times.to_bytes())));
                 }
             }));
             if outcome.is_err() {
@@ -233,10 +241,10 @@ impl Engine {
         let mut response = Response::new(Body::from_stream(body));
         let headers = response.headers_mut();
         if compact {
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(COMPACT_CONTENT_TYPE));
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(compact::CONTENT_TYPE));
         } else {
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(BINARY_CONTENT_TYPE));
-            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary_len(rows, cols)));
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(binary::CONTENT_TYPE));
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary::len(rows, cols)));
         }
         headers.insert("server-timing", server_timing(&[("queue", waited)]));
         Ok(response)

@@ -1,8 +1,8 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use dm_core::compact::COMPACT_CONTENT_TYPE;
 use dm_core::geo::Coord;
-use dm_core::wire::BINARY_CONTENT_TYPE;
+use dm_wire::binary::CONTENT_TYPE as BINARY_CONTENT_TYPE;
+use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

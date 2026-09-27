@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Context, Result};
-use dm_core::compact::{decode_compact, COMPACT_CONTENT_TYPE};
+use dm_core::compact::decode_compact;
 use dm_core::geo::Coord;
-use dm_core::wire::{decode_binary, BINARY_CONTENT_TYPE};
+use dm_wire::binary::{decode as decode_binary, CONTENT_TYPE as BINARY_CONTENT_TYPE};
+use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, clap::ValueEnum)]
@@ -71,7 +72,7 @@ pub async fn measure(client: &reqwest::Client, url: &str, format: WireFormat, bo
     let ttlb = started.elapsed();
     let decoded_cells = match format {
         WireFormat::Binary | WireFormat::Compact => {
-            let matrix = if format == WireFormat::Binary { decode_binary(&bytes)? } else { decode_compact(&bytes)? };
+            let matrix = if format == WireFormat::Binary { decode_binary(&bytes).map_err(anyhow::Error::msg)? } else { decode_compact(&bytes)?.0 };
             matrix.distances.len() + matrix.durations.len()
         }
         WireFormat::Json => {

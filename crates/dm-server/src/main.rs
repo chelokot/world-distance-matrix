@@ -10,19 +10,20 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header, HeaderMap};
-use axum::response::{IntoResponse, Response};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::serve::ListenerExt;
 use axum::Router;
 use clap::Parser;
-use dm_core::compact::COMPACT_CONTENT_TYPE;
 use dm_core::network::Network;
 use dm_core::snap::SnapConfig;
 use dm_core::store::Residency;
-use dm_core::wire::BINARY_CONTENT_TYPE;
+use dm_wire::{binary, compact};
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::{CompressionLayer, CompressionLevel};
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::api::{negotiate, ApiError, Limits, MatrixRequest};
 use crate::engine::{AdmissionConfig, Engine};
@@ -101,6 +102,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Response {
     ([(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
 }
 
+const DEMO_PAGE: &str = include_str!("../../../web/dist/matrix-demo.html");
+
+async fn demo() -> Html<&'static str> {
+    Html(DEMO_PAGE)
+}
+
 async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], state.metrics.render()).into_response()
 }
@@ -118,7 +125,9 @@ async fn shutdown_signal() {
 }
 
 fn router(state: Arc<AppState>, max_locations: usize) -> Router {
+    let server_timing = HeaderName::from_static("server-timing");
     Router::new()
+        .route("/", get(demo))
         .route("/matrix", post(matrix))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
@@ -126,8 +135,17 @@ fn router(state: Arc<AppState>, max_locations: usize) -> Router {
         .layer(
             CompressionLayer::new()
                 .quality(CompressionLevel::Fastest)
-                .compress_when(DefaultPredicate::new().and(NotForContentType::new(BINARY_CONTENT_TYPE)).and(NotForContentType::new(COMPACT_CONTENT_TYPE))),
+                .compress_when(DefaultPredicate::new().and(NotForContentType::new(binary::CONTENT_TYPE)).and(NotForContentType::new(compact::CONTENT_TYPE))),
         )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([header::CONTENT_TYPE, header::ACCEPT])
+                .expose_headers([server_timing])
+                .max_age(Duration::from_secs(86_400)),
+        )
+        .layer(SetResponseHeaderLayer::overriding(HeaderName::from_static("timing-allow-origin"), HeaderValue::from_static("*")))
         .with_state(state)
 }
 

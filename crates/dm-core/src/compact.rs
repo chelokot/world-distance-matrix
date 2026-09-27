@@ -1,13 +1,10 @@
-use anyhow::{ensure, Result};
+use anyhow::Result;
+use dm_wire::compact::{payload_len, zigzag, ServerTimes, FRAME_ROWS, MAGIC};
+use dm_wire::{DecodedMatrix, NO_ROUTE};
 use rayon::prelude::*;
 
 use crate::geo::{hilbert_index, Coord};
-use crate::weight::UNREACHABLE_VALUE;
-use crate::wire::DecodedMatrix;
 
-pub const COMPACT_CONTENT_TYPE: &str = "application/vnd.distance-matrix.compact.v1";
-pub const COMPACT_MAGIC: [u8; 4] = *b"DMC1";
-pub const FRAME_ROWS: usize = 32;
 const ZSTD_LEVEL: i32 = 3;
 
 pub fn spatial_order(points: &[Coord]) -> Vec<u32> {
@@ -19,15 +16,7 @@ pub fn spatial_order(points: &[Coord]) -> Vec<u32> {
 pub fn compact_header(row_order: &[u32], col_order: &[u32]) -> Vec<u8> {
     let (rows, cols) = (row_order.len(), col_order.len());
     let words = [rows as u32, cols as u32, rows.div_ceil(FRAME_ROWS) as u32].into_iter().chain(row_order.iter().copied()).chain(col_order.iter().copied());
-    COMPACT_MAGIC.into_iter().chain(words.flat_map(u32::to_le_bytes)).collect()
-}
-
-fn zigzag(value: i64) -> u32 {
-    ((value << 1) ^ (value >> 63)) as u32
-}
-
-fn unzigzag(value: u32) -> i64 {
-    (value >> 1) as i64 ^ -((value & 1) as i64)
+    MAGIC.into_iter().chain(words.flat_map(u32::to_le_bytes)).collect()
 }
 
 pub struct CompactEncoder {
@@ -46,7 +35,7 @@ impl CompactEncoder {
         for (index, (current, out)) in interleaved_rows.chunks_exact(cols).zip(residuals.chunks_exact_mut(cols)).enumerate() {
             let (mut left, mut up_left) = (0i64, 0i64);
             for ((&value, above), residual) in current.iter().zip(self.previous[index % 2].iter_mut()).zip(out) {
-                let filled = if value == UNREACHABLE_VALUE { 0 } else { value as i64 };
+                let filled = if value == NO_ROUTE { 0 } else { value as i64 };
                 *residual = zigzag(filled - *above - left + up_left);
                 (up_left, left, *above) = (*above, filled, filled);
             }
@@ -63,7 +52,7 @@ impl CompactEncoder {
 fn frame(cols: usize, values: &[u32], residuals: &[u32]) -> Vec<u8> {
     let rows = values.len() / (2 * cols);
     let cells = rows * cols;
-    let mut payload = vec![0u8; 8 * cells + cells.div_ceil(8)];
+    let mut payload = vec![0u8; payload_len(cells)];
     for (row, residual_row) in residuals.chunks_exact(2 * cols).enumerate() {
         for (matrix, matrix_row) in residual_row.chunks_exact(cols).enumerate() {
             for (col, residual) in matrix_row.iter().enumerate() {
@@ -74,71 +63,15 @@ fn frame(cols: usize, values: &[u32], residuals: &[u32]) -> Vec<u8> {
             }
         }
     }
-    for (cell, _) in values.chunks_exact(2 * cols).flat_map(|row| &row[..cols]).enumerate().filter(|&(_, &value)| value == UNREACHABLE_VALUE) {
+    for (cell, _) in values.chunks_exact(2 * cols).flat_map(|row| &row[..cols]).enumerate().filter(|&(_, &value)| value == NO_ROUTE) {
         payload[8 * cells + cell / 8] |= 1 << (cell % 8);
     }
     let compressed = zstd::bulk::compress(&payload, ZSTD_LEVEL).expect("zstd compresses in memory");
     [(rows as u32).to_le_bytes(), (compressed.len() as u32).to_le_bytes()].concat().into_iter().chain(compressed).collect()
 }
 
-struct Reader<'a> {
-    body: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, len: usize) -> Result<&'a [u8]> {
-        ensure!(self.offset + len <= self.body.len(), "compact body is truncated");
-        self.offset += len;
-        Ok(&self.body[self.offset - len..self.offset])
-    }
-
-    fn word(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into()?))
-    }
-
-    fn words(&mut self, count: usize) -> Result<Vec<u32>> {
-        Ok(self.take(4 * count)?.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect())
-    }
-}
-
-pub fn decode_compact(body: &[u8]) -> Result<DecodedMatrix> {
-    let mut reader = Reader { body, offset: 0 };
-    ensure!(reader.take(4)? == COMPACT_MAGIC, "not a compact distance matrix body");
-    let (rows, cols, frames) = (reader.word()? as usize, reader.word()? as usize, reader.word()?);
-    let (row_order, col_order) = (reader.words(rows)?, reader.words(cols)?);
-    let mut encoded = [vec![0u32; rows * cols], vec![0u32; rows * cols]];
-    let mut previous = [vec![0i64; cols], vec![0i64; cols]];
-    let mut first_row = 0;
-    for _ in 0..frames {
-        let (frame_rows, size) = (reader.word()? as usize, reader.word()? as usize);
-        let cells = frame_rows * cols;
-        let payload = zstd::bulk::decompress(reader.take(size)?, 8 * cells + cells.div_ceil(8))?;
-        ensure!(payload.len() == 8 * cells + cells.div_ceil(8), "compact frame has the wrong size");
-        for (matrix, above) in previous.iter_mut().enumerate() {
-            for row in 0..frame_rows {
-                let (mut left, mut up_left) = (0i64, 0i64);
-                for (col, above) in above.iter_mut().enumerate() {
-                    let cell = row * cols + col;
-                    let zig = u32::from_le_bytes(std::array::from_fn(|byte| payload[(4 * matrix + byte) * cells + cell]));
-                    let value = unzigzag(zig) + *above + left - up_left;
-                    (up_left, left, *above) = (*above, value, value);
-                    let unreachable = (payload[8 * cells + cell / 8] >> (cell % 8)) & 1 == 1;
-                    encoded[matrix][(first_row + row) * cols + col] = if unreachable { UNREACHABLE_VALUE } else { value as u32 };
-                }
-            }
-        }
-        first_row += frame_rows;
-    }
-    ensure!(first_row == rows && reader.offset == body.len(), "compact body does not hold a {rows}x{cols} matrix");
-    let [mut distances, mut durations] = [vec![0u32; rows * cols], vec![0u32; rows * cols]];
-    for (k, &row) in row_order.iter().enumerate() {
-        for (l, &col) in col_order.iter().enumerate() {
-            let (target, source) = (row as usize * cols + col as usize, k * cols + l);
-            (distances[target], durations[target]) = (encoded[0][source], encoded[1][source]);
-        }
-    }
-    Ok(DecodedMatrix { rows, cols, distances, durations })
+pub fn decode_compact(body: &[u8]) -> Result<(DecodedMatrix, ServerTimes)> {
+    dm_wire::compact::decode(body, |frame, len| zstd::bulk::decompress(frame, len).map_err(|e| e.to_string())).map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]
@@ -157,13 +90,15 @@ mod tests {
             for _ in 0..rows {
                 let reachable: Vec<bool> = (0..cols).map(|_| rng.gen_bool(0.7)).collect();
                 for limit in [60_000_000, 9_000_000] {
-                    interleaved.extend(reachable.iter().map(|&r| if r { rng.gen_range(0..limit) } else { UNREACHABLE_VALUE }));
+                    interleaved.extend(reachable.iter().map(|&r| if r { rng.gen_range(0..limit) } else { NO_ROUTE }));
                 }
             }
             let mut encoder = CompactEncoder::new(cols);
             let blocks = interleaved.chunks(2 * FRAME_ROWS * 2 * cols).flat_map(|block| encoder.encode(block));
-            let body: Vec<u8> = compact_header(&row_order, &col_order).into_iter().chain(blocks).collect();
-            let decoded = decode_compact(&body).unwrap();
+            let times = ServerTimes { queue_us: 1, prepare_us: 20, compute_us: 300 };
+            let body: Vec<u8> = compact_header(&row_order, &col_order).into_iter().chain(blocks).chain(times.to_bytes()).collect();
+            let (decoded, decoded_times) = decode_compact(&body).unwrap();
+            assert_eq!(decoded_times, times);
             for (k, row) in interleaved.chunks_exact(2 * cols).enumerate() {
                 for (l, &col) in col_order.iter().enumerate() {
                     let cell = row_order[k] as usize * cols + col as usize;

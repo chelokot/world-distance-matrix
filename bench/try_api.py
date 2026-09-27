@@ -75,18 +75,22 @@ def decode_compact(response: http.client.HTTPResponse):
         encoded[:, first : first + height] = block
         no_route[first : first + height] = np.unpackbits(np.frombuffer(payload, np.uint8, offset=8 * cells), count=cells, bitorder="little").reshape(height, cols)
         first += height
+    queue_us, prepare_us, compute_us = struct.unpack("<III", response.read(12))
+    received += 12
     encoded[:, no_route] = NO_ROUTE
     matrix = np.empty((2, rows, cols), np.uint32)
     matrix[:, row_order[:, None], col_order[None, :]] = encoded
-    return matrix[0], matrix[1], received
+    return matrix[0], matrix[1], received, (queue_us / 1000, prepare_us / 1000, compute_us / 1000)
 
 
-def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -> tuple[float, int, int]:
+def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -> tuple[float, int, int, str]:
     started = time.perf_counter()
     response = post(connection, payload, format)
+    server = response.getheader("server-timing", "")
     if format == "compact":
-        distances, _, size = decode_compact(response)
+        distances, _, size, (queue, prepare, compute) = decode_compact(response)
         unreachable = int((distances == NO_ROUTE).sum())
+        server = f"queue {queue:.1f} ms, snapping and setup {prepare:.1f} ms, all rows {compute:.1f} ms"
     elif format == "binary":
         data = response.read()
         size = len(data)
@@ -95,7 +99,7 @@ def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str) -
         data = response.read()
         size = len(data)
         unreachable = sum(row.count(None) for row in json.loads(data)["times"])
-    return (time.perf_counter() - started) * 1000, size, unreachable
+    return (time.perf_counter() - started) * 1000, size, unreachable, server
 
 
 def main() -> None:
@@ -130,6 +134,7 @@ def main() -> None:
     print(f"{args.points} x {args.points} {args.format}, {len(results)} requests on one connection, response {results[-1][1] / 1e6:.2f} MB")
     print(f"time to last byte incl. decoding: p50 {percentile(0.5):.1f} ms, p90 {percentile(0.9):.1f} ms, p99 {percentile(0.99):.1f} ms, max {latencies[-1]:.1f} ms")
     print(f"mean {statistics.fmean(latencies):.1f} ms; cells without a route in the last response: {results[-1][2]:,} of {args.points ** 2:,}")
+    print(f"server, last response: {results[-1][3]}")
 
 
 if __name__ == "__main__":

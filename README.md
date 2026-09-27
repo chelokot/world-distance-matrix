@@ -70,12 +70,15 @@ unsigned 32-bit little-endian:
 | 16     | row order: `rows` indices; encoded row `k` is row `row_order[k]` of the answer                             |
 | …      | column order: `cols` indices                                                                              |
 | …      | `frames` times: rows in the frame, compressed length, one zstd frame                                     |
+| …      | server timings in microseconds: queue wait, until the first frame, until the last frame                  |
 
 A decompressed frame of `h` rows holds, for its `h × cols` cells in encoded order, the four byte planes of the zigzag
 residuals of the distances, then those of the times, then one bit per cell (least significant first) set where there is
 no route. Cells without a route count as 0 and neighbours outside the matrix as 0, so a frame decodes as two cumulative
-sums added to the last row of the previous frame. `bench/try_api.py` has a 25-line numpy decoder (Python 3.14 for the
-standard-library zstd); `dm_core::compact::decode_compact` is the Rust one.
+sums added to the last row of the previous frame. The timings at the end exist because rows are sent while later ones
+are still being computed, so no header could carry them. `bench/try_api.py` has a 25-line numpy decoder (Python 3.14
+for the standard-library zstd); `dm_wire::compact::decode` is the Rust one, used by the server's tests and, compiled to
+WebAssembly, by the demo page.
 
 **Semantics**
 
@@ -109,6 +112,16 @@ locations/cells (limits below), `503` at capacity (with `Retry-After`; retry wit
 | cells per binary request | 100,000,000 (10k × 10k)  |
 | cells per JSON request   | 16,000,000 (4k × 4k)     |
 
+### `GET /` — demo page
+
+A single self-contained HTML file (`web/dist/matrix-demo.html`, built by `web/build.py` from `web/demo.html` and the
+`dm-web` crate compiled to WebAssembly, embedded gzip-compressed). It spreads evenly spaced points over Eurasia that
+are connected with Frankfurt by road, requests their matrix in any of the three formats, and shows where the time went:
+connection, the way to the server, queue, snapping and search setup, computing rows, the way back, download and
+decoding in the browser. Two clicked points show their distance and time next to the straight line, with a link to
+the same route in Google Maps. The page also works opened from disk; the API allows cross-origin calls and exposes
+its timings to browsers.
+
 ### `GET /health`, `GET /metrics`
 
 Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests_total`, `dm_compute_seconds`,
@@ -119,6 +132,8 @@ Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests
 Public instances serve the whole planet, each on one c5a.4xlarge: `http://3.65.232.220:8080` in Frankfurt
 (eu-central-1, availability zone ID `euc1-az2`) and `http://100.57.61.188:8080` in northern Virginia (us-east-1,
 `use1-az5`). They are a demo and may be taken down.
+
+Open either address in a browser for the demo page described above, or use a terminal:
 
 ```bash
 curl -s http://100.57.61.188:8080/health
