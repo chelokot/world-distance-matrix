@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use dm_wire::compact::CompactDecoder;
-use dm_wire::{binary, DecodedMatrix, NO_ROUTE};
+use dm_wire::{binary, DecodedMatrix, RowSink, NO_ROUTE};
 
 pub fn in_eurasia(lat: f64, lon: f64) -> bool {
     let in_box = (1.0..=75.0).contains(&lat) && (-10.5..=180.0).contains(&lon);
@@ -34,33 +34,99 @@ pub fn eurasia_lattice(lattice: u32, rotation_deg: f64) -> Vec<(f64, f64)> {
         .collect()
 }
 
-pub fn summarize(matrix: &DecodedMatrix) -> [f64; 5] {
-    let (mut distances, mut durations) = (Vec::new(), Vec::new());
-    let mut pairs = 0usize;
-    for row in 0..matrix.rows {
-        for col in (0..matrix.cols).filter(|&col| matrix.rows != matrix.cols || col != row) {
-            pairs += 1;
-            if let (Some(distance), Some(duration)) = (matrix.distance(row, col), matrix.duration(row, col)) {
-                distances.push(distance);
-                durations.push(duration);
+const DISTANCE_BIN_M: u32 = 100;
+const DURATION_BIN_S: u32 = 60;
+
+#[derive(Default)]
+pub struct Stats {
+    square: bool,
+    pairs: u64,
+    routed: u64,
+    distances: Vec<u32>,
+    durations: Vec<u32>,
+    longest: [u32; 2],
+}
+
+fn median(bins: &[u32], count: u64, width: u32) -> f64 {
+    let mut seen = 0u64;
+    let bin = bins.iter().position(|&in_bin| {
+        seen += in_bin as u64;
+        2 * seen > count
+    });
+    (bin.unwrap_or(0) as u32 * width + width / 2) as f64
+}
+
+impl Stats {
+    pub fn of(matrix: &DecodedMatrix) -> Self {
+        let mut stats = Stats::default();
+        stats.start(matrix.rows, matrix.cols);
+        for row in 0..matrix.rows {
+            let cells = row * matrix.cols..(row + 1) * matrix.cols;
+            stats.row(row, &matrix.distances[cells.clone()], &matrix.durations[cells]);
+        }
+        stats
+    }
+
+    pub fn summary(&self) -> [f64; 5] {
+        if self.routed == 0 {
+            return [0.0; 5];
+        }
+        let [distance, duration] = [(&self.distances, DISTANCE_BIN_M), (&self.durations, DURATION_BIN_S)].map(|(bins, width)| median(bins, self.routed, width));
+        [self.routed as f64 / self.pairs as f64, distance, duration, self.longest[0] as f64, self.longest[1] as f64]
+    }
+}
+
+impl RowSink for Stats {
+    fn start(&mut self, rows: usize, cols: usize) {
+        *self = Stats { square: rows == cols, distances: vec![0; 700_000], durations: vec![0; 200_000], ..Stats::default() };
+    }
+
+    fn row(&mut self, index: usize, distances: &[u32], durations: &[u32]) {
+        for (col, (&distance, &duration)) in distances.iter().zip(durations).enumerate() {
+            if self.square && col == index {
+                continue;
             }
+            self.pairs += 1;
+            if distance == NO_ROUTE {
+                continue;
+            }
+            self.routed += 1;
+            let last = self.distances.len() - 1;
+            self.distances[((distance / DISTANCE_BIN_M) as usize).min(last)] += 1;
+            let last = self.durations.len() - 1;
+            self.durations[((duration / DURATION_BIN_S) as usize).min(last)] += 1;
+            self.longest = [self.longest[0].max(distance), self.longest[1].max(duration)];
         }
     }
-    if distances.is_empty() {
-        return [0.0; 5];
+}
+
+struct Sink<'a> {
+    stats: &'a mut Stats,
+    matrix: Option<&'a mut DecodedMatrix>,
+}
+
+impl RowSink for Sink<'_> {
+    fn start(&mut self, rows: usize, cols: usize) {
+        self.stats.start(rows, cols);
+        if let Some(matrix) = &mut self.matrix {
+            matrix.start(rows, cols);
+        }
     }
-    let median = |values: &mut Vec<u32>| {
-        let middle = values.len() / 2;
-        *values.select_nth_unstable(middle).1 as f64
-    };
-    let max = |values: &[u32]| *values.iter().max().expect("non-empty") as f64;
-    [distances.len() as f64 / pairs as f64, median(&mut distances), median(&mut durations), max(&distances), max(&durations)]
+
+    fn row(&mut self, index: usize, distances: &[u32], durations: &[u32]) {
+        self.stats.row(index, distances, durations);
+        if let Some(matrix) = &mut self.matrix {
+            matrix.row(index, distances, durations);
+        }
+    }
 }
 
 #[derive(Default)]
 struct State {
     input: Vec<u8>,
     stream: CompactDecoder,
+    retain: bool,
+    stats: Option<Stats>,
     matrix: DecodedMatrix,
     times: [u32; 3],
     points: Vec<f64>,
@@ -83,7 +149,7 @@ pub extern "C" fn input(len: usize) -> *mut u8 {
 pub extern "C" fn decode_binary() -> u32 {
     STATE.with_borrow_mut(|state| match binary::decode(&state.input) {
         Ok(matrix) => {
-            (state.matrix, state.times) = (matrix, [0; 3]);
+            (state.matrix, state.times, state.stats) = (matrix, [0; 3], None);
             1
         }
         Err(_) => 0,
@@ -91,13 +157,20 @@ pub extern "C" fn decode_binary() -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn stream_start() {
-    STATE.with_borrow_mut(|state| state.stream = CompactDecoder::default())
+pub extern "C" fn stream_start(retain: u32) {
+    STATE.with_borrow_mut(|state| {
+        (state.stream, state.retain, state.stats) = (CompactDecoder::default(), retain == 1, Some(Stats::default()));
+        state.matrix = DecodedMatrix::default();
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn stream_feed() -> u32 {
-    STATE.with_borrow_mut(|state| state.stream.feed(&state.input).is_ok() as u32)
+    STATE.with_borrow_mut(|state| {
+        let State { input, stream, retain, stats, matrix, .. } = state;
+        let stats = stats.as_mut().expect("stream_start comes first");
+        stream.feed(input, &mut Sink { stats, matrix: retain.then_some(matrix) }).is_ok() as u32
+    })
 }
 
 #[no_mangle]
@@ -108,8 +181,8 @@ pub extern "C" fn stream_complete() -> u32 {
 #[no_mangle]
 pub extern "C" fn stream_finish() -> u32 {
     STATE.with_borrow_mut(|state| match std::mem::take(&mut state.stream).finish() {
-        Ok((matrix, times)) => {
-            (state.matrix, state.times) = (matrix, [times.queue_us, times.prepare_us, times.compute_us]);
+        Ok(times) => {
+            state.times = [times.queue_us, times.prepare_us, times.compute_us];
             1
         }
         Err(_) => 0,
@@ -119,8 +192,8 @@ pub extern "C" fn stream_finish() -> u32 {
 #[no_mangle]
 pub extern "C" fn prepare_matrix(rows: u32, cols: u32) {
     STATE.with_borrow_mut(|state| {
-        let cells = rows as usize * cols as usize;
-        state.matrix = DecodedMatrix { rows: rows as usize, cols: cols as usize, distances: vec![NO_ROUTE; cells], durations: vec![NO_ROUTE; cells] };
+        state.matrix.start(rows as usize, cols as usize);
+        state.stats = None;
     })
 }
 
@@ -142,7 +215,7 @@ pub extern "C" fn server_times() -> *const u32 {
 #[no_mangle]
 pub extern "C" fn summary() -> *const f64 {
     STATE.with_borrow_mut(|state| {
-        state.summary = summarize(&state.matrix);
+        state.summary = state.stats.as_ref().map_or_else(|| Stats::of(&state.matrix).summary(), Stats::summary);
         state.summary.as_ptr()
     })
 }
@@ -163,30 +236,20 @@ pub extern "C" fn points() -> *const f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dm_core::compact::{compact_header, encode_frame};
-    use dm_wire::compact::{ServerTimes, FRAME_ROWS};
+    use dm_wire::compact::{decode, encode_frame, encode_header, Axis, Layout, ServerTimes};
 
     #[test]
     fn streams_what_the_server_encodes() {
         let (rows, cols) = (70, 45);
-        let interleaved: Vec<u32> = (0..rows)
-            .flat_map(|row| {
-                let distances: Vec<u32> =
-                    (0..cols).map(|col| if (row + col) % 11 == 0 { NO_ROUTE } else { ((row * 7_919 + col * 104_729) % 40_000_000) as u32 }).collect();
-                let durations: Vec<u32> = distances.iter().map(|&d| if d == NO_ROUTE { NO_ROUTE } else { d / 17 }).collect();
-                distances.into_iter().chain(durations)
-            })
-            .collect();
-        let (row_order, col_order): (Vec<u32>, Vec<u32>) = ((0..rows as u32).rev().collect(), (0..cols as u32).collect());
+        let axis =
+            |len: u32| Axis { order: (0..len).rev().collect(), parents: (0..len).map(|index| (index.saturating_sub(3)..index).rev().collect()).collect() };
+        let layout = Layout { rows: axis(rows), cols: Some(axis(cols)) };
+        let cell =
+            |row: usize, col: usize| (!(row + col).is_multiple_of(11)).then(|| [(row * 7_919 + col * 104_729) as i64, (row * 31 + col * 977) as i64 * 1_000]);
         let times = ServerTimes { queue_us: 3, prepare_us: 400, compute_us: 9_000 };
-        let row = 2 * cols;
-        let frames: Vec<u8> = interleaved
-            .chunks(FRAME_ROWS * row)
-            .enumerate()
-            .flat_map(|(index, frame)| encode_frame(cols, (index > 0).then(|| &interleaved[(index * FRAME_ROWS - 1) * row..index * FRAME_ROWS * row]), frame))
-            .collect();
-        let body = [compact_header(&row_order, &col_order), frames, times.to_bytes()].concat();
-        stream_start();
+        let frames = (0..layout.frames()).flat_map(|frame| encode_frame(&layout, frame, cell));
+        let body: Vec<u8> = encode_header(&layout).into_iter().chain(frames).chain(times.to_bytes()).collect();
+        stream_start(1);
         for piece in body.chunks(1_000) {
             assert_eq!(stream_complete(), 0);
             STATE.with_borrow_mut(|state| state.input = piece.to_vec());
@@ -194,11 +257,22 @@ mod tests {
         }
         assert_eq!(stream_complete(), 1);
         assert_eq!(stream_finish(), 1);
-        let (expected, _) = dm_core::compact::decode_compact(&body).unwrap();
+        let (expected, _) = decode(&body).unwrap();
         STATE.with_borrow(|state| {
             assert_eq!(state.matrix, expected);
             assert_eq!(state.times, [3, 400, 9_000]);
+            assert_eq!(state.stats.as_ref().unwrap().summary(), Stats::of(&expected).summary());
         });
+        stream_start(0);
+        STATE.with_borrow_mut(|state| state.input = body.clone());
+        assert_eq!((stream_feed(), stream_finish()), (1, 1));
+        STATE.with_borrow(|state| assert_eq!((state.matrix.rows, state.stats.as_ref().unwrap().summary()), (0, Stats::of(&expected).summary())));
+    }
+
+    #[test]
+    fn statistics_skip_the_diagonal_and_report_medians_to_their_bin() {
+        let matrix = DecodedMatrix { rows: 2, cols: 2, distances: vec![0, 12_345, NO_ROUTE, 0], durations: vec![0, 4_000, NO_ROUTE, 0] };
+        assert_eq!(Stats::of(&matrix).summary(), [0.5, 12_350.0, 3_990.0, 12_345.0, 4_000.0]);
     }
 
     #[test]

@@ -59,7 +59,7 @@ a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; bo
   <section>
     <h2>1 · Points</h2>
     <div class="row">
-      <select id="count" aria-label="number of points"><option value="100">100 points</option><option value="300">300 points</option><option value="1000" selected>1,000 points</option><option value="2000">2,000 points</option></select>
+      <select id="count" aria-label="number of points"><option value="100">100 points</option><option value="300">300 points</option><option value="1000" selected>1,000 points</option><option value="2000">2,000 points</option><option value="5000">5,000 points</option><option value="10000">10,000 points</option><option value="20000">20,000 points</option></select>
       <button id="spread">Spread over Eurasia</button>
     </div>
     <p id="spread-status" class="note">Evenly spaced points across Eurasia (Africa left out), each kept only if a road within 5 km connects both ways with Frankfurt, so every pair has a route.</p>
@@ -91,10 +91,13 @@ a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; bo
 "use strict";
 const WASM_GZIP_BASE64 = "__WASM_GZIP_BASE64__";
 const API = location.port === "8080" ? location.origin : "http://3.65.232.220:8080";
-const MEDIA = { compact: "application/vnd.distance-matrix.compact.v1", binary: "application/vnd.distance-matrix.v1", json: "application/json" };
+const MEDIA = { compact: "application/vnd.distance-matrix.compact.v2", binary: "application/vnd.distance-matrix.v1", json: "application/json" };
 const REQUEST = "application/vnd.distance-matrix.request.v1";
 const NO_ROUTE = 0xffffffff;
 const FRANKFURT = [50.1109, 8.6821];
+const RETAINED_CELLS = 25e6;
+const CHECK_BATCH = 20000;
+const WARM_UP_POINTS = 1000;
 const COLORS = { connect: "var(--grey)", travel: "var(--blue)", queue: "var(--grey)", prepare: "var(--amber)", compute: "var(--orange)", download: "var(--green)", decode: "var(--violet)" };
 const $ = (id) => document.getElementById(id);
 
@@ -142,11 +145,15 @@ function crowFlies([lat1, lon1], [lat2, lon2]) {
 }
 
 async function connectedToFrankfurt(candidates) {
-  const all = [FRANKFURT, ...candidates];
-  const outward = await post(`${API}/matrix`, all, { sources: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
-  const inward = await post(`${API}/matrix`, all, { destinations: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
-  const there = new Uint32Array(outward, 16), back = new Uint32Array(inward, 16);
-  return candidates.filter((_, k) => there[k + 1] !== NO_ROUTE && back[2 * (k + 1)] !== NO_ROUTE);
+  const kept = [];
+  for (let first = 0; first < candidates.length; first += CHECK_BATCH) {
+    const batch = candidates.slice(first, first + CHECK_BATCH), all = [FRANKFURT, ...batch];
+    const outward = await post(`${API}/matrix`, all, { sources: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
+    const inward = await post(`${API}/matrix`, all, { destinations: [0] }, MEDIA.binary).response.then((r) => r.arrayBuffer());
+    const there = new Uint32Array(outward, 16), back = new Uint32Array(inward, 16);
+    kept.push(...batch.filter((_, k) => there[k + 1] !== NO_ROUTE && back[2 * (k + 1)] !== NO_ROUTE));
+  }
+  return kept;
 }
 
 async function spread() {
@@ -175,7 +182,7 @@ async function spread() {
     const summary = $("spread-status").textContent;
     $("spread-status").textContent = `${summary} Warming up the connection…`;
     const warmUpStarted = performance.now();
-    await post(`${API}/matrix?warm-up=${Date.now()}`, points, {}, MEDIA.binary).response.then((r) => r.arrayBuffer());
+    await post(`${API}/matrix?warm-up=${Date.now()}`, points.slice(0, WARM_UP_POINTS), {}, MEDIA.binary).response.then((r) => r.arrayBuffer());
     const warmUp = ms(performance.now() - warmUpStarted);
     history = [`warm-up ${warmUp}`, ...history].slice(0, 6);
     $("spread-status").textContent = `${summary} The connection was warmed up with one uncompressed 8 MB transfer (${warmUp}): a fresh TCP connection has not yet measured your bandwidth, so its first large answer is slow, as it would be for any client. Real clients keep their connection open.`;
@@ -197,19 +204,28 @@ function drawPoints() {
 }
 
 function select(index) {
-  if (selection.length === 2) selection = [];
-  selection.push(index);
-  markers.forEach((marker, i) => {
+  const previous = selection;
+  selection = [...(selection.length === 2 ? [] : selection), index];
+  new Set([...previous, ...selection]).forEach((i) => {
     const role = selection.indexOf(i);
-    marker.setStyle(role < 0 ? { radius: 3.5, fillColor: "#2563eb", color: "#0b3d91" } : { radius: 7, fillColor: role ? "#7048e8" : "#e8590c", color: "#fff" });
-    if (role >= 0) marker.bringToFront();
+    markers[i].setStyle(role < 0 ? { radius: 3.5, fillColor: "#2563eb", color: "#0b3d91" } : { radius: 7, fillColor: role ? "#7048e8" : "#e8590c", color: "#fff" });
+    if (role >= 0) markers[i].bringToFront();
   });
   line?.remove();
   line = selection.length === 2 ? L.polyline(selection.map((i) => points[i]), { color: "#17212b", weight: 1.5, dashArray: "4 6" }).addTo(map) : null;
   showPair();
 }
 
-function showPair() {
+async function routesBetween(a, b) {
+  if (matrix.retained) {
+    const cells = matrix.rows * matrix.cols, distances = view(Uint32Array, wasm.distances(), cells), durations = view(Uint32Array, wasm.durations(), cells);
+    return [a * matrix.cols + b, b * matrix.cols + a].map((index) => [distances[index], durations[index]]);
+  }
+  const words = new Uint32Array(await post(`${API}/matrix`, [points[a], points[b]], {}, MEDIA.binary).response.then((r) => r.arrayBuffer()), 16);
+  return [[words[1], words[3]], [words[4], words[6]]];
+}
+
+async function showPair() {
   const google = $("google");
   google.hidden = true;
   if (selection.length < 2) {
@@ -218,15 +234,16 @@ function showPair() {
   }
   const [a, b] = selection;
   const crow = km(crowFlies(points[a], points[b]));
-  const cell = (from, to) => {
+  const pair = matrix ? await routesBetween(a, b).catch(() => null) : null;
+  if (selection[0] !== a || selection[1] !== b) return;
+  const cell = (direction) => {
     if (!matrix) return "compute the matrix first";
-    const index = from * matrix.cols + to;
-    const distance = view(Uint32Array, wasm.distances(), matrix.rows * matrix.cols)[index];
-    const duration = view(Uint32Array, wasm.durations(), matrix.rows * matrix.cols)[index];
+    if (!pair) return "the server did not answer";
+    const [distance, duration] = pair[direction];
     return distance === NO_ROUTE ? "no route" : `<b>${km(distance)}</b> · <b>${drive(duration)}</b>`;
   };
   const place = ([lat, lon]) => `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-  $("pair").innerHTML = `<div class="pair"><span style="color:var(--orange)">A → B</span><span>${cell(a, b)}</span><span style="color:var(--violet)">B → A</span><span>${cell(b, a)}</span><span>Straight line</span><span>${crow}</span><span>A</span><span>${place(points[a])}</span><span>B</span><span>${place(points[b])}</span></div>`;
+  $("pair").innerHTML = `<div class="pair"><span style="color:var(--orange)">A → B</span><span>${cell(0)}</span><span style="color:var(--violet)">B → A</span><span>${cell(1)}</span><span>Straight line</span><span>${crow}</span><span>A</span><span>${place(points[a])}</span><span>B</span><span>${place(points[b])}</span></div>`;
   google.href = `https://www.google.com/maps/dir/?api=1&origin=${place(points[a]).replace(" ", "")}&destination=${place(points[b]).replace(" ", "")}&travelmode=driving`;
   google.hidden = false;
 }
@@ -241,12 +258,14 @@ async function compute() {
   $("run-status").textContent = `Requesting ${(points.length ** 2).toLocaleString("en")} routes…`;
   try {
     performance.clearResourceTimings();
+    const retained = points.length ** 2 <= RETAINED_CELLS;
+    if (!retained && format !== "compact") throw new Error(`${format === "json" ? "JSON" : "Binary"} answers for ${points.length.toLocaleString("en")} points do not fit in a browser tab; use Compact`);
     const request = post(url, points, {}, MEDIA[format]);
     const response = await request.response;
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
     let server, received, wireBytes = 0, closed = Promise.resolve();
     if (format === "compact") {
-      wasm.stream_start();
+      wasm.stream_start(retained ? 1 : 0);
       let decoding = 0;
       const reader = response.body.getReader();
       while (!wasm.stream_complete()) {
@@ -263,7 +282,7 @@ async function compute() {
       if (!wasm.stream_finish()) throw new Error("the response ended early");
       const [queue, prepare, total] = Array.from(view(Uint32Array, wasm.server_times(), 3), (us) => us / 1000);
       server = { queue, prepare, beforeFirstByte: queue + prepare, compute: total, decoding };
-      matrix = { rows: points.length, cols: points.length, received, decoded: performance.now() };
+      matrix = { rows: points.length, cols: points.length, received, decoded: performance.now(), retained };
     } else if (format === "json") {
       const payload = await response.arrayBuffer();
       received = performance.now();
@@ -272,7 +291,7 @@ async function compute() {
       const decoded = performance.now();
       const timing = serverTiming(response.headers.get("server-timing"));
       server = { queue: timing.queue, beforeFirstByte: timing.queue + timing.compute, compute: timing.compute };
-      matrix = { rows: parsed.distances.length, cols: parsed.distances[0].length, received, decoded };
+      matrix = { rows: parsed.distances.length, cols: parsed.distances[0].length, received, decoded, retained };
       wasm.prepare_matrix(matrix.rows, matrix.cols);
       const distances = view(Uint32Array, wasm.distances(), matrix.rows * matrix.cols);
       const durations = view(Uint32Array, wasm.durations(), matrix.rows * matrix.cols);
@@ -286,7 +305,7 @@ async function compute() {
       view(Uint8Array, wasm.input(incoming.length), incoming.length).set(incoming);
       if (!wasm.decode_binary()) throw new Error("the response could not be decoded");
       const header = new DataView(payload);
-      matrix = { rows: header.getUint32(8, true), cols: header.getUint32(12, true), received, decoded: performance.now() };
+      matrix = { rows: header.getUint32(8, true), cols: header.getUint32(12, true), received, decoded: performance.now(), retained };
       server = { queue: serverTiming(response.headers.get("server-timing")).queue };
     }
     await closed;
@@ -330,7 +349,7 @@ function render(entry, server, decodedBytes, requestBytes) {
   }
   stages.push(["Download", "download", responseStart, responseEnd, "first to last byte of the answer"]);
   if (format === "compact") {
-    stages.push(["Decode on arrival", "decode", responseStart, responseStart + server.decoding, "Rust in the browser decodes each piece as it arrives (zstd, prediction, reordering), inside the download"]);
+    stages.push(["Decode on arrival", "decode", responseStart, responseStart + server.decoding, "Rust in the browser decodes each frame as it arrives (range decoding, prediction, reordering), inside the download"]);
     stages.push(["Finish decoding", "decode", decodeStart, decodeEnd, "after the last byte: nothing left but checking the end"]);
   } else {
     stages.push([decodeLabel, "decode", decodeStart, decodeEnd, format === "json" ? "JSON.parse in the browser" : "Rust in the browser: split the rows into two matrices"]);

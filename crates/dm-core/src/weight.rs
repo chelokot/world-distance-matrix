@@ -58,7 +58,7 @@ impl RouteValue {
         if weight >= UNREACHABLE {
             return Self::UNREACHABLE;
         }
-        Self { distance_m: (dist_dm(weight) + 5) / 10, duration_s: ((time_ms(weight) + 500) / 1000) as u32 }
+        Self { distance_m: dm_wire::meters(dist_dm(weight) as u64), duration_s: dm_wire::seconds(time_ms(weight)) }
     }
 }
 

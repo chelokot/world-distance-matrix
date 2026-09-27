@@ -1,6 +1,5 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use dm_core::compact::Transport;
 use dm_core::geo::Coord;
 use dm_wire::binary::CONTENT_TYPE as BINARY_CONTENT_TYPE;
 use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
@@ -50,7 +49,6 @@ pub struct MatrixSpec {
     pub sources: Vec<usize>,
     pub destinations: Vec<usize>,
     pub format: Format,
-    pub transport: Transport,
 }
 
 impl MatrixSpec {
@@ -111,22 +109,6 @@ pub fn negotiate(headers: &HeaderMap) -> Result<Format, ApiError> {
     }
 }
 
-pub fn transport(headers: &HeaderMap) -> Transport {
-    let accepts = |name: &str| {
-        headers.get_all(header::ACCEPT_ENCODING).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(|coding| {
-            let mut parts = coding.split(';').map(str::trim);
-            parts.next() == Some(name) && parts.all(|parameter| parameter.strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()).is_none_or(|q| q > 0.0))
-        })
-    };
-    if accepts("zstd") {
-        Transport::Zstd
-    } else if accepts("gzip") {
-        Transport::Gzip
-    } else {
-        Transport::Identity
-    }
-}
-
 fn indices(name: &str, given: Option<Vec<usize>>, count: usize) -> Result<Vec<usize>, ApiError> {
     let indices = given.unwrap_or_else(|| (0..count).collect());
     if indices.is_empty() {
@@ -175,13 +157,8 @@ impl MatrixRequest {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let spec = MatrixSpec {
-            coords,
-            sources: indices("sources", self.sources, count)?,
-            destinations: indices("destinations", self.destinations, count)?,
-            format,
-            transport: Transport::Identity,
-        };
+        let spec =
+            MatrixSpec { coords, sources: indices("sources", self.sources, count)?, destinations: indices("destinations", self.destinations, count)?, format };
         let limit = match format {
             Format::Json => limits.max_json_cells,
             Format::Binary | Format::Compact => limits.max_cells,
@@ -231,26 +208,12 @@ mod tests {
     }
 
     #[test]
-    fn prefers_zstd_then_gzip() {
-        let chosen = |value: &'static str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
-            transport(&headers)
-        };
-        assert_eq!(chosen("gzip, deflate, br, zstd"), Transport::Zstd);
-        assert_eq!(chosen("zstd;q=0.5"), Transport::Zstd);
-        assert_eq!(chosen("gzip, zstd;q=0"), Transport::Gzip);
-        assert_eq!(chosen("br, deflate"), Transport::Identity);
-        assert_eq!(transport(&HeaderMap::new()), Transport::Identity);
-    }
-
-    #[test]
     fn negotiates_formats() {
         let mut headers = HeaderMap::new();
         assert_eq!(negotiate(&headers).unwrap(), Format::Json);
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/vnd.distance-matrix.v1, application/json;q=0.5"));
         assert_eq!(negotiate(&headers).unwrap(), Format::Binary);
-        headers.insert(header::ACCEPT, HeaderValue::from_static("application/vnd.distance-matrix.compact.v1"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/vnd.distance-matrix.compact.v2"));
         assert_eq!(negotiate(&headers).unwrap(), Format::Compact);
         headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
         assert_eq!(negotiate(&headers).unwrap(), Format::Json);

@@ -7,13 +7,12 @@ use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use dm_build::{build, BuildConfig};
-use dm_core::compact::decode_compact;
 use dm_core::geo::Coord;
 use dm_core::network::Network;
 use dm_core::snap::{snap, SnapConfig};
 use dm_core::store::Residency;
 use dm_wire::binary::{decode as decode_binary, CONTENT_TYPE as BINARY_CONTENT_TYPE};
-use dm_wire::compact::CONTENT_TYPE as COMPACT_CONTENT_TYPE;
+use dm_wire::compact::{decode as decode_compact, CONTENT_TYPE as COMPACT_CONTENT_TYPE};
 use dm_wire::request;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -176,35 +175,23 @@ async fn compact_bodies_decode_to_the_binary_matrix() {
     for extra in [json!({}), json!({ "sources": (0..70).map(|i| i * 4).collect::<Vec<_>>() })] {
         let body = body_for(&points, extra);
         let (_, _, binary) = call(app(), "POST", "/matrix", body.clone(), Some(BINARY_CONTENT_TYPE)).await;
-        let (status, headers, compact) = call(app(), "POST", "/matrix", body, Some(COMPACT_CONTENT_TYPE)).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_TYPE], COMPACT_CONTENT_TYPE);
-        let (matrix, times) = decode_compact(&compact).unwrap();
-        assert_eq!(matrix, decode_binary(&binary).unwrap());
-        assert!(times.prepare_us <= times.compute_us, "{times:?}");
-    }
-    let (_, _, binary) = call(app(), "POST", "/matrix", body_for(&points, json!({})), Some(BINARY_CONTENT_TYPE)).await;
-    for (accept_encoding, content_encoding) in [("gzip, zstd", "zstd"), ("gzip, deflate", "gzip")] {
         let request = Request::builder()
             .method("POST")
             .uri("/matrix")
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::ACCEPT, COMPACT_CONTENT_TYPE)
-            .header(header::ACCEPT_ENCODING, accept_encoding)
-            .body(Body::from(body_for(&points, json!({}))))
+            .header(header::ACCEPT_ENCODING, "gzip, zstd")
+            .body(Body::from(body))
             .expect("request");
         let response = app().oneshot(request).await.unwrap();
-        assert_eq!(response.headers()[header::CONTENT_ENCODING], content_encoding);
-        let compressed = response.into_body().collect().await.unwrap().to_bytes();
-        let body = if content_encoding == "zstd" {
-            zstd::stream::decode_all(&compressed[..]).unwrap()
-        } else {
-            let mut body = Vec::new();
-            flate2::read::GzDecoder::new(&compressed[..]).read_to_end(&mut body).unwrap();
-            body
-        };
-        assert!(compressed.len() * 3 < binary.len(), "{content_encoding}: {} bytes vs {} binary", compressed.len(), binary.len());
-        assert_eq!(decode_compact(&body).unwrap().0, decode_binary(&binary).unwrap());
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], COMPACT_CONTENT_TYPE);
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+        let compact = response.into_body().collect().await.unwrap().to_bytes();
+        let (matrix, times) = decode_compact(&compact).unwrap();
+        assert_eq!(matrix, decode_binary(&binary).unwrap());
+        assert!(times.prepare_us <= times.compute_us, "{times:?}");
+        assert!(compact.len() * 10 < binary.len(), "{} bytes vs {} binary", compact.len(), binary.len());
     }
 }
 

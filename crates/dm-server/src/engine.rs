@@ -1,19 +1,22 @@
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue};
 use axum::response::Response;
 use bytes::Bytes;
-use dm_core::compact::{compact_header, encode_frame, spatial_order, Piece, Transport, TransportEncoder};
+use dm_core::compact::{axis, route_cell, spatial_order};
 use dm_core::matrix::{Endpoint, MatrixJob};
 use dm_core::network::Network;
+use dm_core::search::UpwardSearch;
 use dm_core::snap::{snap, SnapConfig};
+use dm_core::weight::{Weight, UNREACHABLE};
 use dm_core::wire::encode_json;
-use dm_wire::compact::{ServerTimes, FRAME_ROWS};
+use dm_wire::compact::{encode_frame, encode_header, Layout, ServerTimes, FRAME_ROWS};
 use dm_wire::{binary, compact};
 use rayon::prelude::*;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
@@ -96,39 +99,64 @@ type BodySender = mpsc::UnboundedSender<Result<Bytes, std::io::Error>>;
 
 struct Sequencer<'a> {
     next: usize,
-    waiting: BTreeMap<usize, Piece>,
-    wire: &'a mut TransportEncoder,
+    waiting: BTreeMap<usize, Vec<u8>>,
     body_tx: &'a BodySender,
     delivering: bool,
 }
 
 impl Sequencer<'_> {
-    fn deliver(&mut self, index: usize, piece: Piece) {
-        self.waiting.insert(index, piece);
-        while let Some(piece) = self.waiting.remove(&self.next) {
+    fn deliver(&mut self, index: usize, frame: Vec<u8>) {
+        self.waiting.insert(index, frame);
+        while let Some(frame) = self.waiting.remove(&self.next) {
             self.next += 1;
-            self.delivering &= self.body_tx.send(Ok(Bytes::from(self.wire.push(piece)))).is_ok();
+            self.delivering &= self.body_tx.send(Ok(Bytes::from(frame))).is_ok();
         }
     }
 }
 
-fn stream_frames(job: &MatrixJob, transport: Transport, wire: &mut TransportEncoder, body_tx: &BodySender) -> bool {
+struct Progress {
+    computed: Vec<bool>,
+    prefix: usize,
+    claimed_frames: usize,
+}
+
+impl Progress {
+    fn complete(&mut self, row: usize) -> Range<usize> {
+        self.computed[row] = true;
+        while self.computed.get(self.prefix) == Some(&true) {
+            self.prefix += 1;
+        }
+        let ready = if self.prefix == self.computed.len() { self.prefix.div_ceil(FRAME_ROWS) } else { self.prefix / FRAME_ROWS };
+        let claimed = self.claimed_frames..ready;
+        self.claimed_frames = claimed.end;
+        claimed
+    }
+}
+
+fn stream_frames(job: &MatrixJob, layout: &Layout, body_tx: &BodySender) -> bool {
     let (rows, cols) = (job.source_count(), job.target_count());
-    let sequencer = Mutex::new(Sequencer { next: 0, waiting: BTreeMap::new(), wire, body_tx, delivering: true });
-    rayon::scope_fifo(|scope| {
-        for (index, start) in (0..rows).step_by(FRAME_ROWS).enumerate() {
-            let sequencer = &sequencer;
-            scope.spawn_fifo(move |_| {
-                if !sequencer.lock().expect("sequencer lock").delivering {
-                    return;
-                }
-                let (first, end) = (start.saturating_sub(1), (start + FRAME_ROWS).min(rows));
-                let mut block = vec![0u32; (end - first) * 2 * cols];
-                job.compute_rows_on_this_thread(first..end, &mut block);
-                let (above, own) = block.split_at((start - first) * 2 * cols);
-                let piece = transport.encode(encode_frame(cols, (start > 0).then_some(above), own));
-                sequencer.lock().expect("sequencer lock").deliver(index, piece);
-            });
+    let computed: Vec<OnceLock<Vec<Weight>>> = (0..rows).map(|_| OnceLock::new()).collect();
+    let next_row = AtomicUsize::new(0);
+    let progress = Mutex::new(Progress { computed: vec![false; rows], prefix: 0, claimed_frames: 0 });
+    let sequencer = Mutex::new(Sequencer { next: 0, waiting: BTreeMap::new(), body_tx, delivering: true });
+    rayon::broadcast(|_| {
+        let mut search = UpwardSearch::default();
+        loop {
+            let row = next_row.fetch_add(1, Ordering::Relaxed);
+            if row >= rows || !sequencer.lock().expect("sequencer lock").delivering {
+                return;
+            }
+            let mut weights = vec![UNREACHABLE; cols];
+            job.compute_row(&mut search, row, &mut weights);
+            computed[row].set(weights).expect("each row is computed once");
+            let frames = progress.lock().expect("progress lock").complete(row);
+            for frame in frames {
+                let end = ((frame + 1) * FRAME_ROWS).min(rows);
+                let ready: Vec<&[Weight]> =
+                    computed[..end].iter().map(|row| row.get().expect("rows before the completed prefix are computed").as_slice()).collect();
+                let bytes = encode_frame(layout, frame, |row, col| route_cell(ready[row][col]));
+                sequencer.lock().expect("sequencer lock").deliver(frame, bytes);
+            }
         }
     });
     sequencer.into_inner().expect("sequencer lock").delivering
@@ -228,17 +256,13 @@ impl Engine {
     async fn stream(self: &Arc<Self>, mut spec: MatrixSpec, admitted: Admitted) -> Result<Response, ApiError> {
         let (rows, cols) = (spec.sources.len(), spec.destinations.len());
         let compact = spec.format == Format::Compact;
-        let transport = if compact { spec.transport } else { Transport::Identity };
-        let mut wire = TransportEncoder::new(transport);
-        let head = if compact {
+        let orders = compact.then(|| {
             let order = |indices: &[usize]| spatial_order(&indices.iter().map(|&i| spec.coords[i]).collect::<Vec<_>>());
             let (row_order, col_order) = (order(&spec.sources), order(&spec.destinations));
             spec.sources = row_order.iter().map(|&k| spec.sources[k as usize]).collect();
             spec.destinations = col_order.iter().map(|&k| spec.destinations[k as usize]).collect();
-            [wire.start(), wire.push(transport.encode(compact_header(&row_order, &col_order)))].concat()
-        } else {
-            binary::header(rows as u32, cols as u32).to_vec()
-        };
+            (row_order, col_order)
+        });
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
         let (body_tx, body_rx) = mpsc::unbounded_channel::<Result<Bytes, std::io::Error>>();
         let engine = Arc::clone(self);
@@ -247,11 +271,16 @@ impl Engine {
             let started = Instant::now();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let job = engine.prepare(&spec);
+                let layout = orders.map(|(row_order, col_order)| {
+                    let shared = spec.sources == spec.destinations;
+                    Layout { rows: axis(row_order, job.sources()), cols: (!shared).then(|| axis(col_order, job.targets())) }
+                });
+                let head = layout.as_ref().map_or_else(|| binary::header(rows as u32, cols as u32).to_vec(), encode_header);
                 if ready_tx.send(()).is_err() || body_tx.send(Ok(Bytes::from(head))).is_err() {
                     return;
                 }
                 let prepared = started.elapsed();
-                if !compact {
+                let Some(layout) = layout else {
                     let rows_per_block = (engine.block_bytes / (8 * cols)).max(1);
                     for start in (0..rows).step_by(rows_per_block) {
                         let end = (start + rows_per_block).min(rows);
@@ -262,11 +291,11 @@ impl Engine {
                         }
                     }
                     return;
-                }
-                if stream_frames(&job, transport, &mut wire, &body_tx) {
+                };
+                if stream_frames(&job, &layout, &body_tx) {
                     let micros = |duration: Duration| duration.as_micros() as u32;
                     let times = ServerTimes { queue_us: micros(waited), prepare_us: micros(prepared), compute_us: micros(started.elapsed()) };
-                    let _ = body_tx.send(Ok(Bytes::from([wire.push(transport.encode(times.to_bytes())), wire.finish()].concat())));
+                    let _ = body_tx.send(Ok(Bytes::from(times.to_bytes())));
                 }
             }));
             if outcome.is_err() {
@@ -284,10 +313,6 @@ impl Engine {
         let headers = response.headers_mut();
         if compact {
             headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(compact::CONTENT_TYPE));
-            headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
-            if let Some(encoding) = transport.content_encoding() {
-                headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static(encoding));
-            }
         } else {
             headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(binary::CONTENT_TYPE));
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(binary::len(rows, cols)));

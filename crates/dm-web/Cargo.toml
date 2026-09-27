@@ -10,5 +10,3 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 dm-wire.workspace = true
 
-[dev-dependencies]
-dm-core.workspace = true

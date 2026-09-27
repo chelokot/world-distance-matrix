@@ -25,7 +25,7 @@ use tower_http::compression::{CompressionLayer, CompressionLevel};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::api::{negotiate, transport, Limits, MatrixRequest};
+use crate::api::{negotiate, Limits, MatrixRequest};
 use crate::engine::{AdmissionConfig, Engine};
 use crate::metrics::Metrics;
 
@@ -73,8 +73,7 @@ async fn matrix(State(state): State<Arc<AppState>>, headers: HeaderMap, body: By
     let outcome = async {
         let format = format?;
         let request = MatrixRequest::parse(&headers, &body)?;
-        let mut spec = request.validate(format, &state.limits)?;
-        spec.transport = transport(&headers);
+        let spec = request.validate(format, &state.limits)?;
         let shape = (spec.sources.len(), spec.destinations.len());
         state.engine.matrix(spec).await.map(|response| (response, shape))
     }

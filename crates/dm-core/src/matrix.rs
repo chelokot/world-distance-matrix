@@ -175,6 +175,18 @@ impl<'n> MatrixJob<'n> {
         self.targets.len()
     }
 
+    pub fn sources(&self) -> &[Endpoint] {
+        &self.sources
+    }
+
+    pub fn targets(&self) -> &[Endpoint] {
+        &self.targets
+    }
+
+    pub fn compute_row(&self, search: &mut UpwardSearch, source: usize, row: &mut [Weight]) {
+        self.row(search, &self.sources[source], row);
+    }
+
     fn row(&self, search: &mut UpwardSearch, source: &Endpoint, row: &mut [Weight]) {
         row.fill(UNREACHABLE);
         if let Some(snap) = source.snap {
@@ -215,15 +227,6 @@ impl<'n> MatrixJob<'n> {
         out.par_chunks_mut(2 * width)
             .zip(&self.sources[rows])
             .for_each_init(|| (UpwardSearch::default(), vec![UNREACHABLE; width]), |(search, row), (chunk, source)| self.fill_row(search, row, source, chunk));
-    }
-
-    pub fn compute_rows_on_this_thread(&self, rows: Range<usize>, out: &mut [u32]) {
-        let width = self.targets.len();
-        assert_eq!(out.len(), rows.len() * 2 * width);
-        let (mut search, mut row) = (UpwardSearch::default(), vec![UNREACHABLE; width]);
-        for (chunk, source) in out.chunks_exact_mut(2 * width.max(1)).zip(&self.sources[rows]) {
-            self.fill_row(&mut search, &mut row, source, chunk);
-        }
     }
 }
 
