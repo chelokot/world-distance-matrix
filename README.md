@@ -118,7 +118,7 @@ locations/cells (limits below), `503` at capacity (with `Retry-After`; retry wit
 | limit (default)                     | value                    |
 |-------------------------------------|--------------------------|
 | locations per request               | 25,000                   |
-| cells per binary or compact request | 100,000,000 (10k × 10k); the public instance allows 400,000,000 (20k × 20k) |
+| cells per binary or compact request | 100,000,000 (10k × 10k); `infra/deploy/dm-server.env` raises it to 400,000,000 (20k × 20k) |
 | cells per JSON request              | 16,000,000 (4k × 4k)     |
 
 ### `GET /` — demo page
@@ -140,28 +140,29 @@ Liveness/readiness with the loaded dataset, and Prometheus metrics (`dm_requests
 
 ## Try it
 
-A public instance serves the whole planet at `http://3.65.232.220:8080`: one c5a.4xlarge in Frankfurt
-(eu-central-1, availability zone ID `euc1-az2`). It is a demo and may be taken down.
-
-Open the address in a browser for the demo page described above, or use a terminal:
+The public demo instance in Frankfurt (`http://3.65.232.220:8080`, where every number in this README and the report
+was measured) was shut down on 2026-09-28 to save its cost; the dataset it served, `planet-260921-car-v3-f3`, stays in
+the S3 bucket. `infra/launch-server.sh planet-260921-car-v3-f3` starts an identical server (one c5a.4xlarge, ready
+in about 15 minutes) in us-east-1; set `AWS_REGION`, `SUBNET` and `SECURITY_GROUP` for another region. With its
+address in `SERVER`, open `$SERVER` in a browser for the demo page described above, or use a terminal:
 
 ```bash
-curl -s http://3.65.232.220:8080/health
+curl -s $SERVER/health
 ```
 
 ```bash
-curl -s http://3.65.232.220:8080/matrix -H 'content-type: application/json' -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}'
+curl -s $SERVER/matrix -H 'content-type: application/json' -d '{"coordinates":[{"lat":54.0,"lon":10.0},{"lat":54.1,"lon":10.1},{"lat":54.2,"lon":10.4}]}'
 ```
 
 Time to last byte for 1,000 random points around a city, measured by a client that only needs Python's standard library:
 
 ```bash
-python3 bench/try_api.py --points 1000 --center 53.55,10.0
+python3 bench/try_api.py --url $SERVER --points 1000 --center 53.55,10.0
 ```
 
 `--format compact` uses the compact format, `--world` draws the points uniformly from the whole globe (most land in
 the sea, more than 5 km from any road), and `--world --on-roads` keeps only points within 5 km of a road.
-`python3 bench/sweep.py --region world` samples road-side points, requests their matrix and reports impossible cells
+`python3 bench/sweep.py --url $SERVER --region world` samples road-side points, requests their matrix and reports impossible cells
 (shorter than the great circle, triangle violations, one-way reachability) and the most suspicious ones.
 
 From outside AWS the result includes the internet round trip and the time your line needs for 8 MB. The 100 ms target

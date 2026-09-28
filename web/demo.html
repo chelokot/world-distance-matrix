@@ -90,7 +90,7 @@ a.button { display: inline-block; margin-top: 0.7rem; padding: 0.4rem 0.7rem; bo
 <script>
 "use strict";
 const WASM_GZIP_BASE64 = "__WASM_GZIP_BASE64__";
-const API = location.port === "8080" ? location.origin : "http://3.65.232.220:8080";
+const API = location.port === "8080" ? location.origin : "http://localhost:8080";
 const MEDIA = { compact: "application/vnd.distance-matrix.compact.v2", binary: "application/vnd.distance-matrix.v1", json: "application/json" };
 const REQUEST = "application/vnd.distance-matrix.request.v1";
 const NO_ROUTE = 0xffffffff;

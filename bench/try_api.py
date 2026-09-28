@@ -108,7 +108,7 @@ def fetch(connection: http.client.HTTPConnection, payload: bytes, format: str, p
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Request square distance matrices and report client-side time to last byte, decoding included (compact needs cargo build --release -p dm-web).")
-    parser.add_argument("--url", default="http://3.65.232.220:8080")
+    parser.add_argument("--url", required=True, help="the server, e.g. http://203.0.113.7:8080")
     parser.add_argument("--center", default="53.55,10.0", help="lat,lon around which random points are drawn (default: Hamburg)")
     parser.add_argument("--radius-km", type=float, default=25.0)
     parser.add_argument("--world", action="store_true", help="draw points uniformly over the whole globe instead")

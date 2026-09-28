@@ -38,7 +38,7 @@ def great_circle_m(points: np.ndarray) -> np.ndarray:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sample road-side points, request their matrix and check it for impossible or suspicious cells.")
-    parser.add_argument("--url", default="http://3.65.232.220:8080")
+    parser.add_argument("--url", required=True, help="the server, e.g. http://203.0.113.7:8080")
     parser.add_argument("--region", choices=list(REGIONS), default="europe")
     parser.add_argument("--points", type=int, default=1500)
     parser.add_argument("--show", type=int, default=5, help="worst pairs to print per finding")
